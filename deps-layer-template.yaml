@@ -1,0 +1,14 @@
+# deps-layer-template.yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Python dependencies layer for Shining Smiles WhatsApp bot
+
+Resources:
+  DepsLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: shining-smiles-deps-layer
+      Description: Dependencies for Shining Smiles WhatsApp bot
+      ContentUri: layer-build/aws-sam-python3.11-layer.zip  # Direct ZIP reference
+      CompatibleRuntimes:
+        - python3.11

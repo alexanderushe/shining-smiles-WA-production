@@ -1,0 +1,136 @@
+{
+  "school_info": "🌟 Shining Smiles School offers quality education from *ECD-A to Form 6*, with both *Zimsec* and *Cambridge* curricula, fostering academic excellence and personal growth.",
+  "website": "🌐 www.shiningsmilescollege.ac.zw",
+  "contacts": {
+    "emails": {
+      "general": "info@shiningsmilescollege.ac.zw",
+      "admin": "admin@shiningsmilescollege.ac.zw",
+      "head": "head@shiningsmilescollege.ac.zw"
+    },
+    "phone": ["+263774373297", "+263773228491"],
+    "whatsapp": "+263788286744"
+  },
+  "location": {
+    "admin_office": "📍 39 Winson Road, Hatfield, Harare, Zimbabwe.",
+    "branch_1": "📍 14 Alexandra Drive, Hatfield, Harare, Zimbabwe.",
+    "branch_2": "📍 1 Mudimu Village, Ziko, Chitungwiza, Zimbabwe.",
+    "branch_3": "📍 142 Kilwinning Road, Hatfield, Harare, Zimbabwe."
+  },
+  "school_calendar": {
+    "term_3_opening": "📅 9 September 2025",
+    "term_3_closing": "📅 4 December 2025"
+  },
+  "operating_times": {
+    "school_hours": "0800h - 1500h",
+    "earliest_drop_off": "0645h",
+    "latest_pick_up": "1545h",
+    "late_pickup_penalty": "$10 after 1545h"
+  },
+  "fees_policy": {
+    "registration_fees": "One-time, paid upon registration. Non-refundable and non-transferable.",
+    "tuition_payment": [
+      "Fees must be paid before the first day of term.",
+      "If paying in instalments: 70% before first day of term, 30% before the 1st of the last month of term (1 March, 1 July, 1 November).",
+      "Overpayments carried forward.",
+      "Refunds capped at 70%, via original payment method.",
+      "POP required for confirmation, but does not count as receipt."
+    ],
+    "gate_pass_policy": "Issued after confirmation of fees payment. No entry without valid gate pass."
+  },
+  "transport_policy": {
+    "school_transport": [
+      "Fares announced a month before term.",
+      "Must be paid in advance (installments allowed: 3 per term).",
+      "Transport contract valid for the full term once payment is made.",
+      "Parents must provide correct address and 2 contacts.",
+      "Changes in pickup/drop-off must be communicated in advance."
+    ],
+    "private_transport": [
+      "Parents/private transporters allowed.",
+      "Changes in pickup person must be communicated in advance.",
+      "Uncollected learners after 1700h will be transported by the school at commercial rates."
+    ],
+    "school_premises_rules": [
+      "Max speed: 10km/h",
+      "No hooting, alcohol, smoking, or loud music",
+      "Decent clothing encouraged when dropping/picking learners"
+    ]
+  },
+  "uniform_policy": {
+    "summer": {
+      "boys": {
+        "mon_wed_fri": "Black shoes, grey shorts, grey shirt, grey socks, tie, blazer/cardigan/jersey, sun hat.",
+        "tue_thu": "Sports attire, tracksuit, white socks, white sneakers."
+      },
+      "girls": {
+        "mon_wed_fri": "Black shoes, white socks, sky blue spotted dress, blazer/cardigan/jersey, sun hat.",
+        "tue_thu": "Sports attire, tracksuit, white socks, white sneakers."
+      }
+    },
+    "winter": {
+      "boys": {
+        "mon_wed_fri": "Black shoes, navy blue trousers, white shirt, grey tie, grey socks, blazer/cardigan/jersey, anorak, wool set.",
+        "tue_thu": "Tracksuit, white socks, white sneakers."
+      },
+      "girls": {
+        "mon_wed_fri": "Black shoes, white socks, white shirt, tie, blazer/cardigan/jersey, anorak, wool set.",
+        "tue_thu": "Tracksuit, white socks, white sneakers."
+      }
+    },
+    "rules": [
+      "Correct prescribed uniform required at all times.",
+      "Wrong combinations not allowed (may result in denied access).",
+      "Learners sneaking in without proper uniform may be sent home at parents' cost."
+    ]
+  },
+  "faqs": {
+    "where_are_the_offices": {
+      "short_answer": "Our admin office is at *39 Winson Road, Hatfield, Harare*. ✅",
+      "detailed_answer": "We also have branches at *14 Alexandra Drive, Hatfield*, *1 Mudimu Village, Ziko, Chitungwiza*, and *142 Kilwinning Road, Hatfield*."
+    },
+    "when_do_schools_open": {
+      "short_answer": "📅 Schools open *9 Sept 2025* and close *4 Dec 2025*.",
+      "detailed_answer": "Classes run from 0800h - 1500h daily, earliest drop at 0645h, latest pickup 1545h."
+    },
+    "how_to_apply": {
+      "short_answer": "📝 Apply via _www.shiningsmilescollege.ac.zw_.",
+      "detailed_answer": "You can also email _admin@shiningsmilescollege.ac.zw_ for the admission form and requirements. Registration fees are one-time, non-refundable."
+    },
+    "what_curriculum_do_you_offer": {
+      "short_answer": "📖 We offer *Zimsec* and *Cambridge*, from ECD-A to Form 6.",
+      "detailed_answer": "Our balanced curriculum fosters academic excellence while also emphasizing leadership, critical thinking, and extracurricular growth."
+    },
+    "what_extracurriculars_are_available": {
+      "short_answer": "⚽ We offer sports, music, debate, STEM, and Arts Enrichment.",
+      "detailed_answer": "Students can join soccer, basketball, music band, drama, debate club, coding, and art workshops."
+    },
+    "what_is_the_uniform_policy": {
+      "short_answer": "👕 Learners must wear the prescribed summer/winter uniform.",
+      "detailed_answer": "Full summer and winter dress codes are detailed in the *uniform_policy* section. Wrong uniforms may result in denied access."
+    },
+    "how_much_are_the_fees": {
+      "short_answer": "💰 Fees vary by grade. Please request a fee schedule.",
+      "detailed_answer": "70% of term fees must be paid before school opens, 30% before the 1st of the last month of term (1 March, 1 July, 1 Nov). Overpayments roll forward, and refunds are capped at 70%."
+    },
+    "is_transport_provided": {
+      "short_answer": "🚍 Yes, we provide school transport for Harare & Chitungwiza.",
+      "detailed_answer": "Fares are gazetted before each term. Payments can be spread across 3 installments. Parents must provide accurate pickup/drop-off addresses and contacts. See *transport_policy* for full terms."
+    },
+    "do_you_have_boarding": {
+      "short_answer": "🏠 We are currently a *day school only*.",
+      "detailed_answer": "Boarding facilities are under review and may be introduced in future expansions."
+    },
+    "what_are_operating_times": {
+      "short_answer": "⏰ Classes run 0800h - 1500h.",
+      "detailed_answer": "Earliest drop: 0645h | Latest pickup: 1545h (late fee $10 applies after 1545h)."
+    },
+    "how_many_campuses": {
+      "short_answer": "We have four locations: one admin office and three branches in Hatfield and Ziko.",
+      "detailed_answer": "Our admin office is at 39 Winson Road, Hatfield, Harare. We have branches at 14 Alexandra Drive, Hatfield; 1 Mudimu Village, Ziko, Chitungwiza; and 142 Kilwinning Road, Hatfield."
+    },
+    "which_campuses": {
+      "short_answer": "Our campuses are in Hatfield (Harare) and Ziko (Chitungwiza).",
+      "detailed_answer": "We have an admin office at 39 Winson Road, Hatfield, Harare, and branches at 14 Alexandra Drive, Hatfield; 1 Mudimu Village, Ziko, Chitungwiza; and 142 Kilwinning Road, Hatfield."
+    }
+  }
+}
