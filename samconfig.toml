@@ -7,7 +7,7 @@ s3_prefix = "shining-smiles-webhook-stack"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
 disable_rollback = true
-parameter_overrides = "DeploymentVersion=\"2\" DatabaseUrl=\"postgresql://postgres:%23Alexander94@shining-smiles-db.cxu2ww2uu37o.us-east-2.rds.amazonaws.com:5432/shining_smiles?sslmode=require\" VerifyToken=\"shiningsmiles_verify_2025\""
+parameter_overrides = "DeploymentVersion=\"4\" DatabaseUrl=\"postgresql://postgres:%23Alexander94@shining-smiles-db.cxu2ww2uu37o.us-east-2.rds.amazonaws.com:5432/shining_smiles?sslmode=require\" VerifyToken=\"shiningsmiles_verify_2025\" SecretArn=\"arn:aws:secretsmanager:us-east-2:596814071505:secret:shining-smiles-db-credentials-CskeX3\""
 image_repositories = []
 
 [default.global.parameters]

@@ -13,11 +13,15 @@ logger = setup_logger(__name__)
 
 class SMSClient:
     """Client for Shining Smiles SMS and WhatsApp API."""
-    def __init__(self, request_id=None):
+    def __init__(self, request_id=None, use_cloud_api=None):
         self.base_url = config.SMS_API_BASE_URL.rstrip("/") + "/"
         self.api_key = config.SMS_API_KEY
         self.request_id = request_id or str(uuid.uuid4())
-        self.use_cloud_api = os.getenv("USE_CLOUD_API", "False").lower() == "true"
+        # Allow explicit override of use_cloud_api, otherwise read from env var
+        if use_cloud_api is not None:
+            self.use_cloud_api = use_cloud_api
+        else:
+            self.use_cloud_api = os.getenv("USE_CLOUD_API", "False").lower() == "true"
         logger.info(f"Initializing SMSClient with base_url: {self.base_url}, use_cloud_api: {self.use_cloud_api}, request_id: {self.request_id}")
 
         if not self.base_url:
@@ -67,7 +71,7 @@ class SMSClient:
         for attempt in range(3):
             try:
                 logger.debug(f"Requesting {url} | Params: {params} | Headers: {self.headers}", extra=extra_log)
-                response = requests.get(url, headers=self.headers, params=params, timeout=30, verify=self.verify_ssl)
+                response = requests.get(url, headers=self.headers, params=params, timeout=10, verify=self.verify_ssl)
                 logger.debug(f"Response [{response.status_code}]: {response.text}", extra=extra_log)
                 response.raise_for_status()
                 return self.safe_json_response(response)

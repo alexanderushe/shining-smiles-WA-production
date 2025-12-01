@@ -1,5 +1,61 @@
-node_modules/
+# Environment and secrets
 .env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+.pytest_cache/
+
+# Node
+node_modules/
+
+# Build directories
 dist/
 build/
-venv/
+
+# Dependency packages and Lambda layers
+deploy-package/
+layer-package/
+python/
+db-package/
+package/
+final-package/
+ultimate-package/
+missing-deps-layer/
+openai-layer/
+openai-fix-layer/
+openai-compat-layer/
+
+# Deployment artifacts
+*.zip
+*.pkg
+
+# AWS SAM
+.aws-sam/
+samconfig.toml
+
+# IDE and OS files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.log
+*.tmp
+output.json
+.current-layer-*
+
+# Keep important config files (remove from ignore if needed)
+# !samconfig.toml  # Uncomment to track SAM config

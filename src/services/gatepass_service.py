@@ -4,20 +4,26 @@ import uuid
 import boto3
 from botocore.client import Config
 from datetime import datetime, timezone, timedelta
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
-from reportlab.lib.units import inch
-import qrcode
 import requests
-from flask import render_template, request, jsonify
+import traceback
+
+# Lazy imports - only import when needed to avoid import errors
+# from reportlab - imported in functions that need it
+# import qrcode - imported in functions that need it
+
+try:
+    from flask import render_template, request, jsonify
+except ImportError:
+    # Flask not available in Lambda, that's OK
+    render_template = None
+    request = None
+    jsonify = None
+
 from utils.database import init_db, StudentContact, GatePass, GatePassScan
 from utils.whatsapp import send_whatsapp_message
 from utils.logger import setup_logger
 from api.sms_client import SMSClient
 from config import get_config
-import traceback
 
 logger = setup_logger(__name__)
 config = get_config()
@@ -88,7 +94,7 @@ def send_email_fallback(student_id, whatsapp_number, pass_id, expiry_date, s3_ke
     finally:
         session.remove()
 
-def generate_gatepass(student_id, term, payment_amount, total_fees, request_id):
+def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, requesting_whatsapp_number=None):
     session = init_db()
     extra_log = {"request_id": request_id, "student_id": student_id}
     try:
@@ -120,7 +126,9 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id):
             logger.error(f"No contact found for {student_id}", extra=extra_log)
             return {"error": "No contact found for student ID"}, 404
 
-        whatsapp_number = contact.preferred_phone_number or contact.student_mobile
+        # Use the requesting WhatsApp number if provided (the one the user is messaging from)
+        # Otherwise fall back to database numbers
+        whatsapp_number = requesting_whatsapp_number or contact.preferred_phone_number or contact.student_mobile
         if not whatsapp_number:
             logger.error(f"No valid WhatsApp number for {student_id}", extra=extra_log)
             return {"error": "No valid WhatsApp number found for this student"}, 400
@@ -131,7 +139,7 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id):
             return {"error": f"Invalid WhatsApp number format for {whatsapp_number} (expected + followed by 10-15 digits)"}, 400
 
         # Check WhatsApp registration
-        sms_client = SMSClient(request_id=request_id)
+        sms_client = SMSClient(request_id=request_id, use_cloud_api=True)
         if not sms_client.check_whatsapp_number(whatsapp_number):
             logger.error(f"Number {whatsapp_number} not registered with WhatsApp", extra=extra_log)
             return {"error": f"Number {whatsapp_number} is not registered with WhatsApp. Please register or contact support."}, 400
@@ -215,90 +223,96 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id):
         pdf_path = f"/tmp/{filename}"
         qr_path = f"/tmp/qr_{pass_id}.png"
 
+        # Lazy import segno (pure Python, no PIL needed)
+        try:
+            import segno
+        except ImportError:
+            logger.error("segno library not available", extra=extra_log)
+            return {"error": "PDF generation dependencies not available"}, 500
+
         qr_url = f"{config.APP_BASE_URL}/verify-gatepass?pass_id={pass_id}&whatsapp_number={whatsapp_number}"
         try:
-            qr = qrcode.QRCode(version=1, box_size=10, border=4)
-            qr.add_data(qr_url)
-            qr.make(fit=True)
-            qr_img = qr.make_image(fill_color="black", back_color="white")
-            qr_img.save(qr_path)
+            # Generate QR code using segno (pure Python, no PIL dependency)
+            qr = segno.make(qr_url)
+            qr.save(qr_path, scale=10, border=4)
+            
             if not os.path.exists(qr_path):
                 raise Exception("QR code generation failed")
         except Exception as e:
             logger.error(f"QR code generation failed: {str(e)}", extra=extra_log)
             return {"error": "Failed to generate QR code"}, 500
 
+        # Lazy import fpdf2 only when needed (pure Python, no PIL!)
         try:
-            doc = SimpleDocTemplate(pdf_path, pagesize=letter)
-            styles = getSampleStyleSheet()
-            bold_style = ParagraphStyle(name='Bold', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=12)
-            normal_style = ParagraphStyle(name='Normal', parent=styles['Normal'], fontSize=12)
+            from fpdf import FPDF
+        except ImportError as e:
+            logger.error(f"fpdf2 library not available: {str(e)}", extra=extra_log)
+            return {"error": f"PDF generation dependencies not available: {str(e)}"}, 500
 
-            def add_watermark(canvas, doc):
-                canvas.saveState()
-                canvas.setFillAlpha(0.1)
-                logo_path = "static/school_logo.png"
-                if os.path.exists(logo_path):
-                    canvas.drawImage(logo_path, 150, 300, width=300, height=150, preserveAspectRatio=True, mask='auto')
-                canvas.restoreState()
-
-            story = []
+        try:
+            # Create PDF with fpdf2
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            
+            # Add school logo if exists
             logo_path = "static/school_logo.png"
             if os.path.exists(logo_path):
-                logo = Image(logo_path, width=2*inch, height=1*inch, kind='proportional')
-                title = Paragraph("SHINING SMILES GROUP OF SCHOOLS",
-                                ParagraphStyle(name='Title', fontName='Helvetica-Bold',
-                                             fontSize=16, textColor=colors.darkblue))
-                header_table = Table([[logo, title]], colWidths=[2.5*inch, 4*inch])
-                header_table.setStyle(TableStyle([
-                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                    ('ALIGN', (1, 0), (1, 0), 'LEFT'),
-                ]))
-                story.append(header_table)
-            else:
-                story.append(Paragraph("SHINING SMILES GROUP OF SCHOOLS",
-                                     ParagraphStyle(name='Title', fontName='Helvetica-Bold',
-                                                  fontSize=16, textColor=colors.darkblue)))
-
-            story.append(Spacer(1, 0.5*inch))
-            data = [
-                ["Student ID:", f"{student_id}"],
-                ["Name:", f"{contact.firstname or 'N/A'} {contact.lastname or 'N/A'}"],
-                ["Pass ID:", f"{pass_id}"],
-                ["Issued:", f"{issued_date.strftime('%Y-%m-%d')}"],
-                ["Expires:", f"{expiry_date.strftime('%Y-%m-%d')}"],
-                ["Payment:", f"{payment_percentage:.1f}%"],
-                ["Valid for:", f"{whatsapp_number}"]
+                pdf.image(logo_path, x=10, y=8, w=50)
+                
+            # Title
+            pdf.set_font('Helvetica', 'B', 16)
+            pdf.set_text_color(0, 0, 139)  # Dark blue
+            pdf.cell(0, 10, 'SHINING SMILES GROUP OF SCHOOLS', ln=True, align='C')
+            pdf.ln(10)
+            
+            # Info table with background color
+            pdf.set_fill_color(250, 250, 210)  # Light goldenrod yellow
+            pdf.set_draw_color(128, 128, 128)  # Grey borders
+            pdf.set_font('Helvetica', 'B', 12)
+            pdf.set_text_color(0, 0, 139)  # Dark blue
+            
+            # Table data
+            table_data = [
+                ("Student ID:", str(student_id)),
+                ("Name:", f"{contact.firstname or 'N/A'} {contact.lastname or 'N/A'}"),
+                ("Pass ID:", str(pass_id)),
+                ("Issued:", issued_date.strftime('%Y-%m-%d')),
+                ("Expires:", expiry_date.strftime('%Y-%m-%d')),
+                ("Payment:", f"{payment_percentage:.1f}%"),
+                ("Valid for:", str(whatsapp_number))
             ]
-            info_table = Table(data, colWidths=[2*inch, 4*inch])
-            info_table.setStyle(TableStyle([
-                ('FONT', (0, 0), (0, -1), 'Helvetica-Bold', 12),
-                ('FONT', (1, 0), (1, -1), 'Helvetica', 12),
-                ('TEXTCOLOR', (0, 0), (-1, -1), colors.darkblue),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('BACKGROUND', (0, 0), (-1, -1), colors.lightgoldenrodyellow),
-            ]))
-            story.append(info_table)
-            story.append(Spacer(1, 0.5*inch))
-
-            qr_image = Image(qr_path, width=2*inch, height=2*inch, kind='proportional')
-            qr_table = Table([[qr_image]], colWidths=[2*inch])
-            qr_table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER')]))
-            story.append(qr_table)
-
+            
+            for label, value in table_data:
+                pdf.set_font('Helvetica', 'B', 12)
+                pdf.cell(60, 10, label, border=1, fill=True)
+                pdf.set_font('Helvetica', '', 12)
+                pdf.cell(130, 10, value, border=1, fill=True, ln=True)
+            
+            pdf.ln(10)
+            
+            # QR Code
+            if os.path.exists(qr_path):
+                pdf.image(qr_path, x=80, y=pdf.get_y(), w=50, h=50)
+                pdf.ln(55)
+            
+            # Signature if exists
             signature_path = "static/signature.png"
             if os.path.exists(signature_path):
-                signature = Image(signature_path, width=2*inch, height=0.5*inch, kind='proportional')
-                story.append(Spacer(1, 0.25*inch))
-                story.append(Paragraph("Authorized Signature", normal_style))
-                story.append(signature)
+                pdf.ln(5)
+                pdf.set_font('Helvetica', '', 12)
+                pdf.cell(0, 10, 'Authorized Signature', ln=True)
+                pdf.image(signature_path, x=10, y=pdf.get_y(), w=50, h=12)
             else:
-                story.append(Paragraph("Authorized Signature", normal_style))
-
-            doc.build(story, onFirstPage=add_watermark)
+                pdf.set_font('Helvetica', '', 12)
+                pdf.cell(0, 10, 'Authorized Signature', ln=True)
+            
+            # Save PDF
+            pdf.output(pdf_path)
+            
             if not os.path.exists(pdf_path):
                 raise Exception("PDF generation failed")
+                
         except Exception as e:
             logger.error(f"PDF generation failed: {str(e)}", extra=extra_log)
             return {"error": "Failed to generate PDF"}, 500

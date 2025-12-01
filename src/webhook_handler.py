@@ -1,13 +1,23 @@
 # webhook_handler.py - WhatsApp Cloud API Webhook Handler for Lambda
 
-print("🎯 DEBUG: CORRECT FUNCTION - shining-smiles-webhook LOADED!")
-
-import json
+# Add this at the VERY top of the file
+import sys
 import os
+sys.path.insert(0, os.path.dirname(__file__))
+# Add the current directory to Python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
+print(f"🎯 DEBUG: Python path: {sys.path}")
+print(f"🎯 DEBUG: Current directory: {current_dir}")
+print(f"🎯 DEBUG: Files in current dir: {os.listdir(current_dir)}")
+import json
 import uuid
 import re
 import traceback
 import requests
+import config
 from datetime import datetime, timezone, date
 
 print("🎯 DEBUG: All imports successful!")
@@ -18,7 +28,7 @@ try:
     from utils.whatsapp import send_whatsapp_message
     from utils.logger import setup_logger
     from api.sms_client import SMSClient, RateLimitException
-    from utils.ai_client import AIClient
+    from utils.ai_client import generate_ai_response
     from config import get_config
     from services.gatepass_service import generate_gatepass
     print("🎯 DEBUG: All custom imports successful!")
@@ -30,7 +40,12 @@ except ImportError as e:
         print(f"🎯 FALLBACK: Would send to {to}: {message}")
         return {"status": "fallback"}
     
-    logger = type('Logger', (), {'info': print, 'error': print, 'warning': print})()
+    # Fallback for generate_gatepass
+    def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, requesting_whatsapp_number=None):
+        print(f"🎯 FALLBACK: generate_gatepass called for {student_id}")
+        return {"error": "Gate pass service temporarily unavailable. Please try again later."}, 503
+    
+    logger = type('Logger', (), {'info': print, 'error': print, 'warning': print, 'debug': print})()
     config = type('Config', (), {})()
     print("🎯 DEBUG: Fallback imports created!")
 
@@ -39,13 +54,14 @@ config = get_config() if 'get_config' in locals() else config
 
 print("🎯 DEBUG: Logger and config setup complete!")
 
-def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, ai_client, request_id):
+def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, ai_response_function, request_id):
     """
     Handle WhatsApp message logic - extracted from src/routes/whatsapp.py
     Returns the response text to send back to the user
     """
     current_time = datetime.now(timezone.utc)
     extra_log = {"phone_number": whatsapp_number, "request_id": request_id}
+    ai_client = ai_response_function
 
     menu_text = (
         "Reply with a number or keyword:\n"
@@ -78,13 +94,21 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
         elif "hello" in message_body or "hi" in message_body:
             return "Hello from Shining Smiles! 🎯 How can I help you today? Reply 'menu' for options."
         else:
-            # Use AI client for responses
-            if ai_client and hasattr(ai_client, 'generate_response'):
+            if ai_response_function and callable(ai_response_function):
                 try:
-                    return ai_client.generate_response(message_body)
+                    ai_response = ai_response_function(message_body)
+                    return f"🤖 {ai_response}"
                 except Exception as e:
-                    print(f"🎯 DEBUG: AI client error: {e}")
-            return "Thanks for your message! How can I help you today? Reply 'menu' for options."
+                    print(f"🎯 DEBUG: AI response error: {e}")
+            
+            # Fallback responses
+            if "location" in message_body or "where" in message_body or "school" in message_body:
+                return "📍 Shining Smiles College is located at 12 Churchill Avenue, Alexandra Park, Harare. From town, head north on Churchill Avenue past the Avenues area. We're about 2km from the city center with bright blue gates! 🎓"
+            
+            if "hi" in message_body or "hello" in message_body:
+                return "Hello! 👋 Welcome to Shining Smiles College! How can I help you today?"
+            
+            return "Thanks for your message! How can I assist you? Reply 'menu' for options or ask me anything about our college. 😊"
 
     # Database is available - use full logic
     contacts = session.query(StudentContact).filter((StudentContact.student_mobile == whatsapp_number) |
@@ -130,7 +154,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
             user_state.last_updated = current_time
             session.commit()
             if ai_client:
-                ai_response = ai_client.generate_response("Tell me about Shining Smiles School.")
+                ai_response = ai_client("Tell me about Shining Smiles School.")
                 return f"✨ {ai_response}"
             return "✨ Shining Smiles School is a vibrant learning community dedicated to nurturing young minds."
 
@@ -139,7 +163,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
             user_state.last_updated = current_time
             session.commit()
             if ai_client:
-                ai_response = ai_client.generate_response("Tell me about admissions at Shining Smiles School.")
+                ai_response = ai_client("Tell me about admissions at Shining Smiles School.")
                 return f"📚 {ai_response}"
             return "📚 Admissions are open year-round. Contact admin@shiningsmilescollege.ac.zw for details."
 
@@ -148,7 +172,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
             user_state.last_updated = current_time
             session.commit()
             if ai_client:
-                ai_response = ai_client.generate_response("What are the upcoming events at Shining Smiles School?")
+                ai_response = ai_client("What are the upcoming events at Shining Smiles School?")
                 return f"🎉 {ai_response}"
             return "🎉 Upcoming: Parent-Teacher Meeting on Nov 15. Stay tuned!"
 
@@ -157,7 +181,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
             user_state.last_updated = current_time
             session.commit()
             if ai_client:
-                ai_response = ai_client.generate_response("How can I contact Shining Smiles School?")
+                ai_response = ai_client("How can I contact Shining Smiles School?")
                 return f"📞 {ai_response}"
             return "📞 Email: admin@shiningsmilescollege.ac.zw | Phone: +263 123 4567"
 
@@ -172,7 +196,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
             user_state.last_updated = current_time
             session.commit()
             if ai_client:
-                ai_response = ai_client.generate_response(message_body)
+                ai_response = ai_client(message_body)
                 return f"😊 {ai_response}"
             return "😊 I'm here to help! Reply 'menu' for options."
 
@@ -364,52 +388,55 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                         logger.debug(f"[GatePass] {student_id} - Paid: {total_paid}, Total Fees: {total_fees}, Term: {default_term}", extra=extra_log)
 
                         # Call the gatepass service directly instead of HTTP request
+                        try:
+                            result, status_code = generate_gatepass(
+                                student_id=student_id,
+                                term=default_term,
+                                payment_amount=total_paid,
+                                total_fees=total_fees,
+                                request_id=request_id,
+                                requesting_whatsapp_number=whatsapp_number  # Pass the validated WhatsApp number
+                            )
 
-                        result, status_code = generate_gatepass(
-                            student_id=student_id,
-                            term=default_term,
-                            payment_amount=total_paid,
-                            total_fees=total_fees,
-                            request_id=request_id
-                        )
+                            logger.debug(f"[GatePass Response] {student_id} - {status_code} - {result}", extra=extra_log)
 
-                        # Process the result directly
-                        if status_code == 200:
-                            # Gate pass generated successfully
-                            pass_id = result.get('pass_id')
-                            # ... handle success
-                        else:
-                            # Handle error
-                            error_msg = result.get('error', 'Could not issue gate pass.')
-                        logger.debug(f"[GatePass Response] {student_id} - {gatepass_res.status_code} - {gatepass_res.text}", extra=extra_log)
+                            status_msg = result.get("status", "").lower() if isinstance(result, dict) else ""
 
-                        data = gatepass_res.json()
-                        status_msg = data.get("status", "").lower()
-
-                        student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
-                        if gatepass_res.status_code == 200:
-                            if "already valid" in status_msg or "resent" in status_msg:
-                                gatepass_texts.append(
-                                    f"*Gate Pass for {student_id} ({student_name})*:\n"
-                                    f"You *already have a valid gate pass*.\n"
-                                    f"*Pass ID*: {data.get('pass_id')}\n"
-                                    f"*Expires*: _{data.get('expiry_date')}_\n"
-                                    f"*PDF re-sent to*: {data.get('whatsapp_number')}"
-                                )
+                            student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                            
+                            if status_code == 200:
+                                if "already valid" in status_msg or "resent" in status_msg:
+                                    gatepass_texts.append(
+                                        f"*Gate Pass for {student_id} ({student_name})*:\n"
+                                        f"You *already have a valid gate pass*.\n"
+                                        f"*Pass ID*: {result.get('pass_id')}\n"
+                                        f"*Expires*: _{result.get('expiry_date')}_\n"
+                                        f"*PDF re-sent to*: {result.get('whatsapp_number')}"
+                                    )
+                                else:
+                                    gatepass_texts.append(
+                                        f"*Gate Pass for {student_id} ({student_name})*:\n"
+                                        f"*Gate Pass Issued!* 🎉\n"
+                                        f"*Pass ID*: {result.get('pass_id')}\n"
+                                        f"*Expires*: _{result.get('expiry_date')}_\n"
+                                        f"*Sent to*: {result.get('whatsapp_number')}"
+                                    )
                             else:
+                                error_msg = result.get("error", "Could not issue gate pass.") if isinstance(result, dict) else "Could not issue gate pass."
                                 gatepass_texts.append(
                                     f"*Gate Pass for {student_id} ({student_name})*:\n"
-                                    f"*Gate Pass Issued!* 🎉\n"
-                                    f"*Pass ID*: {data.get('pass_id')}\n"
-                                    f"*Expires*: _{data.get('expiry_date')}_\n"
-                                    f"*Sent to*: {data.get('whatsapp_number')}"
+                                    f"*{error_msg}*"
                                 )
-                        else:
-                            error_msg = data.get("error", "Could not issue gate pass.")
+
+                        except Exception as e:
+                            logger.error(f"Gate pass service error for {student_id}: {str(e)}", extra=extra_log)
+                            # student_name must be defined before accessing it in exception handler
+                            student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
                             gatepass_texts.append(
                                 f"*Gate Pass for {student_id} ({student_name})*:\n"
-                                f"*{error_msg}*"
+                                f"*Service temporarily unavailable*"
                             )
+
 
                     if not gatepass_texts:
                         user_state.state = "main_menu"
@@ -548,24 +575,17 @@ def process_cloud_api_message(message, metadata):
         except Exception as db_error:
             print(f"🎯 DEBUG: init_db failed: {db_error}")
             session = None
-        
-        # Test AIClient separately  
-        try:
-            print("🎯 DEBUG: Testing AIClient only...")
-            ai_client = AIClient(request_id=request_id)
-            print("🎯 DEBUG: AIClient succeeded")
-        except Exception as ai_error:
-            print(f"🎯 DEBUG: AIClient failed: {ai_error}")
-            ai_client = None
+    
         
         # Test SMSClient separately
         try:
             print("🎯 DEBUG: Testing SMSClient only...")
-            sms_client = SMSClient(request_id=request_id)
+            sms_client = SMSClient(request_id=request_id, use_cloud_api=True)
             print("🎯 DEBUG: SMSClient succeeded")
         except Exception as sms_error:
             print(f"🎯 DEBUG: SMSClient failed: {sms_error}")
-            sms_client = type('SMSClient', (), {'request_id': request_id})()
+            # Don't create a broken fallback - let it fail properly
+            raise
 
         from_number = f"+{message.get('from')}"
         message_id = message.get("id")
@@ -580,9 +600,16 @@ def process_cloud_api_message(message, metadata):
 
         print(f"🎯 DEBUG: Processing message from {from_number}: '{message_body}'")
 
-        # Use the handle_whatsapp_message function
+        try:
+            from utils.ai_client import generate_ai_response
+            ai_response_function = generate_ai_response
+            print("✅ AI client initialized successfully")
+        except Exception as ai_error:
+            print(f"❌ AI client failed: {ai_error}")
+            ai_response_function = None
+
         response_text = handle_whatsapp_message(
-            from_number, message_body, session, sms_client, ai_client, request_id
+            from_number, message_body, session, sms_client, ai_response_function, request_id
         )
 
         print(f"🎯 DEBUG: Response generated: '{response_text}'")
@@ -590,12 +617,11 @@ def process_cloud_api_message(message, metadata):
         # Send response using Cloud API
         if response_text:
             print(f"🎯 DEBUG: Sending response to {from_number}")
-            result = send_whatsapp_message(
+            result = send_whatsapp_message_real(
                 to=from_number,
-                message=response_text,
-                use_cloud_api=True
+                message=response_text
             )
-            print(f"🎯 DEBUG: Response sent: {result}")
+            print(f"🎯 DEBUG: WhatsApp Response sent: {result}")
 
         if session:
             session.close()
@@ -606,21 +632,72 @@ def process_cloud_api_message(message, metadata):
         traceback.print_exc()
         if session:
             session.close()
+    
+# ===== REAL WHATSAPP SENDER =====
+def send_whatsapp_message_real(to: str, message: str):
+    import os
+    import requests
+
+    token = os.getenv("WHATSAPP_CLOUD_API_TOKEN")
+    phone_number_id = os.getenv("WHATSAPP_CLOUD_NUMBER")
+    
+    # FIX: Add safety checks
+    if token:
+        print(f"USING PHONE NUMBER ID: {phone_number_id}")
+        print(f"USING TOKEN: {token[:20]}...")
+    else:
+        print("❌ ERROR: Missing WHATSAPP_CLOUD_API_TOKEN")
+        return {"error": "missing credentials"}
+
+    if not token or not phone_number_id:
+        print("ERROR: Missing WHATSAPP_CLOUD_API_TOKEN or WHATSAPP_CLOUD_NUMBER")
+        return {"error": "missing credentials"}
+
+    url = f"https://graph.facebook.com/v19.0/{phone_number_id}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {"body": message}
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
+        print(f"WhatsApp API → {response.status_code} {response.text}")
+        if response.status_code == 200:
+            return {"status": "sent", "data": response.json()}
+        else:
+            return {"error": f"HTTP {response.status_code}", "response": response.json()}
+    except Exception as e:
+        print(f"Exception sending WhatsApp message: {e}")
+        return {"error": str(e)}
 
 def lambda_handler(event, context):
-    print("🎯 DEBUG: lambda_handler CALLED IN CORRECT FUNCTION!")
-    print(f"🎯 DEBUG: Event keys: {list(event.keys())}")
+    print("🎯 DEBUG: Lambda handler started")
+    print("🎯 DEBUG: Event keys:", list(event.keys()))
     
-    # Get HTTP method from requestContext for HTTP API v2.0
-    http_method = event.get('requestContext', {}).get('http', {}).get('method')
-    print(f"🎯 DEBUG: HTTP Method from requestContext: {http_method}")
+    # Get HTTP method from different possible locations
+    http_method = event.get('httpMethod') 
+    if not http_method:
+        http_method = event.get('requestContext', {}).get('http', {}).get('method')
+    
+    print(f"🎯 DEBUG: HTTP Method: {http_method}")
     
     if http_method == 'GET':
+        # Webhook verification - only for GET requests
         print("🎯 DEBUG: Handling GET request (webhook verification)")
         query = event.get('queryStringParameters', {})
         verify_token = query.get('hub.verify_token')
         challenge = query.get('hub.challenge')
-        if verify_token == os.getenv("WHATSAPP_VERIFY_TOKEN"):
+        
+        expected_token = os.getenv("WHATSAPP_VERIFY_TOKEN")
+        print(f"🎯 DEBUG: Expected token: {expected_token}, Received token: {verify_token}")
+        
+        if verify_token == expected_token:
             print("🎯 DEBUG: Webhook verification SUCCESS")
             return {
                 'statusCode': 200,
@@ -632,10 +709,15 @@ def lambda_handler(event, context):
             return {'statusCode': 403, 'body': 'Verification failed'}
 
     elif http_method == 'POST':
-        print("🎯 DEBUG: Handling POST request (message)")
+        # Message processing - no verification needed for POST
+        print("🎯 DEBUG: Handling POST request (message processing)")
         try:
-            body = json.loads(event['body'])
-            print(f"🎯 DEBUG: JSON parsed, object: {body.get('object')}")
+            # Parse the body
+            body = event.get('body')
+            if isinstance(body, str):
+                body = json.loads(body)
+            
+            print("🎯 DEBUG: Parsed body:", json.dumps(body, default=str))
             
             if not body or body.get("object") != "whatsapp_business_account":
                 print("🎯 DEBUG: Invalid body, returning OK")
@@ -643,25 +725,30 @@ def lambda_handler(event, context):
 
             print("🎯 DEBUG: Valid WhatsApp message received")
             
+            # Process messages
             for entry in body.get("entry", []):
                 for change in entry.get("changes", []):
                     value = change.get("value", {})
                     
+                    # Skip status updates (read, delivered, etc.)
+                    if "statuses" in value:
+                        print("DEBUG: Ignoring status update")
+                        continue
+                        
                     if "messages" in value:
                         messages = value["messages"]
-                        print(f"🎯 DEBUG: Found {len(messages)} messages")
                         for message in messages:
-                            print(f"🎯 DEBUG: Processing message ID: {message.get('id')}")
                             process_cloud_api_message(message, value.get("metadata", {}))
             
             print("🎯 DEBUG: All messages processed, returning OK")
             return {'statusCode': 200, 'body': 'OK'}
 
-        except json.JSONDecodeError:
-            print("🎯 DEBUG: JSON decode error")
+        except json.JSONDecodeError as e:
+            print("🎯 DEBUG: JSON decode error:", str(e))
             return {'statusCode': 400, 'body': 'Invalid JSON'}
         except Exception as e:
-            print(f"🎯 DEBUG: Error in POST handler: {e}")
+            print("🎯 DEBUG: Error in POST handler:", str(e))
+            import traceback
             traceback.print_exc()
             return {'statusCode': 500, 'body': 'Error'}
 
