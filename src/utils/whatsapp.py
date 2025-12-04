@@ -43,8 +43,14 @@ def send_whatsapp_message(to, message, media_url=None, max_attempts=3, delay=2, 
         "text": {"body": message}
     }
     if media_url:
-        payload["type"] = "image"
-        payload["image"] = {"link": media_url}
+        payload.pop("text", None)
+        # Check if it's a PDF (simple heuristic for pre-signed URLs)
+        if ".pdf" in media_url.lower():
+            payload["type"] = "document"
+            payload["document"] = {"link": media_url, "caption": message, "filename": "GatePass.pdf"}
+        else:
+            payload["type"] = "image"
+            payload["image"] = {"link": media_url, "caption": message}
 
     for attempt in range(max_attempts):
         try:

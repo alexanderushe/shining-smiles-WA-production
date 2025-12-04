@@ -55,6 +55,9 @@ samconfig.toml
 *.log
 *.tmp
 output.json
+response*.json
+quick_migration*.py
+nat_user_data*.sh
 .current-layer-*
 
 # Keep important config files (remove from ignore if needed)

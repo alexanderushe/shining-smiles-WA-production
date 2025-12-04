@@ -235,18 +235,27 @@ def check_new_payments(student_id, term, phone_number=None, session=None, test_m
                 contact.last_updated = datetime.datetime.now(datetime.timezone.utc)
                 session.commit()
 
-        # Send payment confirmation
-        payment_percentage = (total_paid / total_fees) * 100
-        message = (
-            f"Dear {fullname}, thank you for your payment of ${total_paid} for {student_id} (Term {term}). "
-            f"Your current balance is ${balance}."
-        )
-        try:
-            send_whatsapp_message(phone_number, message)
-            logger.info(f"Sent payment confirmation for {student_id} to {phone_number}")
-        except Exception as e:
-            logger.error(f"Failed to send WhatsApp message for {student_id}: {str(e)}")
-            return {"error": f"Failed to send payment confirmation: {str(e)}"}, 500
+        # Send payment confirmation ONLY if new payment detected
+        last_paid = contact.last_total_paid or 0.0
+        if total_paid > last_paid:
+            payment_percentage = (total_paid / total_fees) * 100
+            message = (
+                f"Dear {fullname}, thank you for your payment of ${total_paid - last_paid} for {student_id} (Term {term}). "
+                f"Total paid: ${total_paid}. Your current balance is ${balance}."
+            )
+            try:
+                send_whatsapp_message(phone_number, message)
+                logger.info(f"Sent payment confirmation for {student_id} to {phone_number}")
+                
+                # Update last_total_paid to prevent duplicate messages
+                contact.last_total_paid = total_paid
+                session.commit()
+            except Exception as e:
+                logger.error(f"Failed to send WhatsApp message for {student_id}: {str(e)}")
+                return {"error": f"Failed to send payment confirmation: {str(e)}"}, 500
+        else:
+            logger.info(f"No new payments for {student_id} (Total: {total_paid}, Last Ack: {last_paid})")
+            payment_percentage = (total_paid / total_fees) * 100
 
         # Generate gate pass if payment meets threshold
         if payment_percentage >= 50:

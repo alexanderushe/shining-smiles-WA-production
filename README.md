@@ -13,9 +13,19 @@ This application serves as an automated receptionist and administrative assistan
 *   **WhatsApp Integration**: Full two-way communication using the WhatsApp Cloud API.
 *   **User Verification**: Automatically identifies users based on their registered phone number.
 *   **Gate Pass Generation**:
-    *   Validates student eligibility (fees paid).
-    *   Generates a secure gate pass with ID, photo (if available), and validity details.
-    *   *Note: Currently sending text-based passes with verification links while PDF generation is being optimized.*
+    *   Validates student eligibility based on fee payment percentage (≥50% required).
+    *   Generates professional PDF gate passes with QR codes for verification.
+    *   Delivers via WhatsApp with automatic fallback to text-only if delivery fails.
+    *   **QR Code Verification**: Scannable QR codes link to web-based verification page.
+    *   **Rate Limiting**: Intelligent tiered system prevents abuse:
+        *   Requests 1-3: Full PDF service
+        *   Requests 4-5: Text-only details (saves bandwidth)
+        *   Requests 6+: Blocked with helpful message
+    *   **Term Restrictions**: Gate passes only issued during active school terms.
+    *   **Dynamic Expiry**: Pass validity calculated based on payment percentage:
+        *   100%: Valid until term end
+        *   70-99%: Valid until 1 month before term end
+        *   50-69%: Valid until end of current month
 *   **External API Integration**: Connects to the school's central SMS database for real-time data.
 *   **Deployment**: Automated Docker-based deployment to AWS Lambda.
 

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gate Pass Verification - Shining Smiles</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .card {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+        }
+        .logo {
+            width: 80px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #2c3e50;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        .status {
+            display: inline-block;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .valid {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .invalid {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .details {
+            text-align: left;
+            margin-top: 20px;
+            border-top: 1px solid #eee;
+            padding-top: 20px;
+        }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .label {
+            color: #6c757d;
+            font-weight: 500;
+        }
+        .value {
+            color: #2c3e50;
+            font-weight: 600;
+        }
+        .warning {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 20px;
+            font-size: 13px;
+        }
+        .footer {
+            margin-top: 30px;
+            font-size: 12px;
+            color: #adb5bd;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <!-- Logo placeholder - assumes static assets are served or embedded -->
+        <!-- <img src="https://api.shiningsmilescollege.ac.zw/static/school_logo.png" alt="Shining Smiles Logo" class="logo"> -->
+        
+        <h1>Gate Pass Verification</h1>
+        
+        {% if status == 'valid' %}
+            <div class="status valid">✅ VALID GATE PASS</div>
+        {% else %}
+            <div class="status invalid">❌ INVALID / EXPIRED</div>
+        {% endif %}
+
+        <div class="details">
+            <div class="detail-row">
+                <span class="label">Student Name:</span>
+                <span class="value">{{ student_name }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="label">Student ID:</span>
+                <span class="value">{{ student_id }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="label">Issued Date:</span>
+                <span class="value">{{ issued_date }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="label">Expiry Date:</span>
+                <span class="value">{{ expiry_date }}</span>
+            </div>
+        </div>
+
+        {% if warning %}
+            <div class="warning">
+                ⚠️ {{ warning }}
+            </div>
+        {% endif %}
+
+        <div class="footer">
+            Shining Smiles Group of Schools<br>
+            Official Verification System
+        </div>
+    </div>
+</body>
+</html>

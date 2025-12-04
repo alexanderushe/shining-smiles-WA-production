@@ -1,0 +1,97 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  shining-smiles-wa-production-schedules
+
+  SAM Template to add EventBridge schedules to existing Shining Smiles WhatsApp Bot
+
+Parameters:
+  ExistingFunctionArn:
+    Type: String
+    Default: "arn:aws:lambda:us-east-2:596814071505:function:shining-smiles-whatsapp"
+    Description: ARN of the existing Lambda function
+
+Resources:
+  # 1. Daily Payment Check (8:00 AM CAT / 06:00 UTC)
+  PaymentCheckRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: DailyPaymentCheck
+      Description: Trigger payment checks daily at 06:00 UTC
+      ScheduleExpression: cron(0 6 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !Ref ExistingFunctionArn
+          Id: PaymentCheckTarget
+          Input: '{"source": "aws.events", "action": "check_payments"}'
+
+  PaymentCheckPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ExistingFunctionArn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PaymentCheckRule.Arn
+
+  # 2. Weekly Reminders (Monday 9:00 AM CAT / 07:00 UTC)
+  ReminderRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: WeeklyReminders
+      Description: Trigger balance reminders every Monday at 07:00 UTC
+      ScheduleExpression: cron(0 7 ? * MON *)
+      State: ENABLED
+      Targets:
+        - Arn: !Ref ExistingFunctionArn
+          Id: ReminderTarget
+          Input: '{"source": "aws.events", "action": "send_reminders"}'
+
+  ReminderPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ExistingFunctionArn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ReminderRule.Arn
+
+  # 3. Daily Profile Sync (2:00 AM CAT / 00:00 UTC)
+  ProfileSyncRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: DailyProfileSync
+      Description: Sync student profiles daily at 00:00 UTC
+      ScheduleExpression: cron(0 0 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !Ref ExistingFunctionArn
+          Id: ProfileSyncTarget
+          Input: '{"source": "aws.events", "action": "sync_profiles"}'
+
+  ProfileSyncPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ExistingFunctionArn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ProfileSyncRule.Arn
+
+  # 4. Hourly Health Check (Canary)
+  HealthCheckRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: HourlyHealthCheck
+      Description: Check internet connectivity every hour
+      ScheduleExpression: rate(1 hour)
+      State: ENABLED
+      Targets:
+        - Arn: !Ref ExistingFunctionArn
+          Id: HealthCheckTarget
+          Input: '{"source": "aws.events", "action": "check_health"}'
+
+  HealthCheckPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ExistingFunctionArn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt HealthCheckRule.Arn

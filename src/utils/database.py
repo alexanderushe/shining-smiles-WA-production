@@ -28,6 +28,7 @@ class StudentContact(Base):
     outstanding_balance = Column(Float, nullable=True)
     last_updated = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
     last_api_sync = Column(DateTime(timezone=True), nullable=True)
+    last_total_paid = Column(Float, default=0.0)
 
 class GatePass(Base):
     __tablename__ = "gate_passes"
@@ -74,6 +75,14 @@ class VerificationCode(Base):
     code = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
     expires_at = Column(DateTime(timezone=True), nullable=False)
+
+class GatePassRequestLog(Base):
+    __tablename__ = "gate_pass_request_logs"
+    id = Column(Integer, primary_key=True)
+    student_id = Column(String, nullable=False)
+    week_start_date = Column(DateTime(timezone=True), nullable=False)  # Monday of the week
+    request_count = Column(Integer, default=0)
+    last_request_date = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 def get_secret(secret_name):
     """Retrieve secret from AWS Secrets Manager with fallback to env var."""

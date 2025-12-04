@@ -89,7 +89,7 @@ def check_all_payments():
                 session.rollback()
 
         # Batch check payments
-        batch_size = 2
+        batch_size = 10
         batches = [list(student_ids)[i:i + batch_size] for i in range(0, len(student_ids), batch_size)]
         logger.info(f"💳 Checking payments for {len(student_ids)} students in {len(batches)} batches")
 
@@ -119,7 +119,7 @@ def check_all_payments():
                     session.rollback()
 
             logger.info("⏳ Sleeping between batches...")
-            time.sleep(60)
+            time.sleep(2)
 
         session.commit()
         logger.info(f"✅ Completed payment checks for term {TERM}")

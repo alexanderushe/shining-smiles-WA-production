@@ -3,7 +3,9 @@
 ## 🏗️ Architecture
 
 *   **Runtime**: Python 3.11 on AWS Lambda
-*   **Trigger**: API Gateway (Webhook for WhatsApp Cloud API)
+*   **Trigger**: 
+    *   API Gateway (Webhook for WhatsApp Cloud API)
+    *   AWS EventBridge (Scheduled Cron Jobs)
 *   **Database**: PostgreSQL (AWS RDS) - accessed via `sqlalchemy` + `pg8000`
 *   **External Integrations**:
     *   **WhatsApp Cloud API**: For messaging.
@@ -62,7 +64,109 @@ This script is the source of truth for deployments. It performs the following st
     *   **Timeouts**: If the SMS API is slow, the Lambda might time out. We have set a **10s timeout** on external API calls to fail fast.
     *   **Dependency Errors**: `ImportError` usually means a binary mismatch. Always use `./docker-deploy.sh` to rebuild.
 
+## 🤖 Automation & Scheduling
+We use **AWS EventBridge** to handle scheduled background tasks. This allows the bot to be proactive rather than just reactive.
+
+### **Scheduled Events**
+The `template.yaml` defines the following schedules:
+1.  **Daily Payment Check** (`06:00 UTC`): Checks for new payments and updates the database.
+2.  **Weekly Reminders** (`Monday 07:00 UTC`): Sends balance reminders to parents.
+3.  **Daily Profile Sync** (`00:00 UTC`): Syncs student data from the School SMS.
+
+### **Scalable Profile Sync ("Smart Batching")**
+To handle large datasets (1000+ students) without hitting AWS Lambda's 15-minute timeout, we implemented a **Recursive Lambda** pattern:
+1.  **Time-Aware**: The sync function (`sync_student_profiles`) monitors its own execution time.
+2.  **Graceful Stop**: If execution exceeds **12 minutes**, it stops processing and saves its state (current page).
+3.  **Self-Invocation**: The Lambda function asynchronously invokes *itself* with the `start_page` parameter to resume exactly where it left off.
+4.  **Result**: Infinite scalability for student records without timeout errors.
+
+## 🎫 Gate Pass System
+
+### **Overview**
+The gate pass system allows parents to request digital passes for students to leave school premises. It incorporates multiple safeguards to ensure security and prevent resource abuse.
+
+### **Core Components**
+
+#### **1. PDF Generation (`gatepass_service.py`)**
+- **Library**: `fpdf2` (pure Python, no C dependencies)
+- **QR Codes**: Generated using `segno` library
+- **Storage**: PDFs uploaded to S3 bucket (`shining-smiles-gatepasses`)
+- **Delivery**: Sent via WhatsApp Cloud API with presigned URLs (1-hour expiry)
+
+#### **2. QR Code Verification**
+- **Endpoint**: `GET /verify-gatepass?pass_id=<UUID>&whatsapp_number=<NUMBER>`
+- **Route**: Configured in API Gateway, handled by Lambda
+- **Template Engine**: Jinja2 (standalone, no Flask context required)
+- **Security**: Tracks scan attempts in `gate_pass_scans` table
+- **Warning System**: Alerts if scanned by unauthorized number
+
+#### **3. Rate Limiting (Tiered Access Control)**
+- **Database**: `gate_pass_request_logs` table tracks weekly requests per student
+- **Reset Logic**: Automatic weekly reset every Monday
+- **Tiers**:
+  - **Tier 1 (1-3 requests)**: Send full PDF via WhatsApp
+  - **Tier 2 (4-5 requests)**: Send text-only details (no PDF)
+  - **Tier 3 (6+ requests)**: Block with 429 status code
+- **Cost Savings**: Reduces WhatsApp media message costs and S3 bandwidth
+
+#### **4. Term Restrictions**
+- **Configuration**: Term dates defined in `config.py`
+  - `TERM_START_DATES`: Beginning of each term
+  - `TERM_END_DATES`: End of each term
+- **Validation**: Gate passes only issued if current date is within active term
+- **User Message**: If term ended, bot informs user of next term start date
+
+#### **5. Dynamic Expiry Calculation**
+Gate pass validity is calculated based on payment percentage:
+```python
+if payment_percentage >= 100:
+    expiry = term_end_date
+elif payment_percentage >= 70:
+    expiry = term_end_date - 30 days
+elif payment_percentage >= 50:
+    expiry = end_of_current_month
+else:
+    # No gate pass issued
+```
+
+### **Database Schema**
+
+#### **gate_passes**
+| Column | Type | Description |
+|:---|:---|:---|
+| `id` | Integer | Primary key |
+| `student_id` | String | Foreign key to student_contacts |
+| `pass_id` | String (UUID) | Unique pass identifier |
+| `issued_date` | DateTime | When pass was created |
+| `expiry_date` | DateTime | When pass becomes invalid |
+| `payment_percentage` | Integer | Fee payment % at time of issue |
+| `whatsapp_number` | String | Authorized phone number |
+| `pdf_path` | String | S3 key for PDF file |
+
+#### **gate_pass_scans**
+| Column | Type | Description |
+|:---|:---|:---|
+| `id` | Integer | Primary key |
+| `pass_id` | String | Reference to gate pass |
+| `scanned_at` | DateTime | Scan timestamp |
+| `scanned_by_number` | String | Phone number that scanned |
+| `matched_registered_number` | Boolean | Security flag |
+
+#### **gate_pass_request_logs**
+| Column | Type | Description |
+|:---|:---|:---|
+| `id` | Integer | Primary key |
+| `student_id` | String | Student identifier |
+| `week_start_date` | DateTime | Monday of current week |
+| `request_count` | Integer | Number of requests this week |
+| `last_request_date` | DateTime | Most recent request |
+
+### **API Gateway Configuration**
+- **Route**: `GET /verify-gatepass`
+- **Integration**: Lambda proxy integration to `shining-smiles-whatsapp`
+- **Permissions**: API Gateway has invoke permission for Lambda
+- **Response**: Returns HTML page rendered by Jinja2
+
 ## 🔮 Future Roadmap
-*   **PDF Gate Passes**: Re-enabling full PDF generation once dependency issues are fully resolved.
 *   **Progress Reports**: Integration with grading system (See `PROGRESS_REPORTS_PLAN.md`).
 *   **Attendance Alerts**: Proactive notifications for parents.

@@ -19,7 +19,7 @@ except ImportError:
     request = None
     jsonify = None
 
-from utils.database import init_db, StudentContact, GatePass, GatePassScan
+from utils.database import init_db, StudentContact, GatePass, GatePassScan, GatePassRequestLog
 from utils.whatsapp import send_whatsapp_message
 from utils.logger import setup_logger
 from api.sms_client import SMSClient
@@ -31,8 +31,6 @@ config = get_config()
 # AWS S3 client
 s3 = boto3.client(
     's3',
-    aws_access_key_id=config.AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=config.AWS_SECRET_ACCESS_KEY,
     region_name='us-east-2',
     config=Config(signature_version='s3v4')
 )
@@ -61,6 +59,54 @@ def calculate_expiry_date(term, payment_percentage, payment_date=None):
     else:
         logger.warning(f"Payment percentage {payment_percentage}% below 50%; no gate pass issued.")
         return None
+
+def check_and_update_rate_limit(session, student_id, extra_log):
+    """
+    Check and update the weekly rate limit for gate pass requests.
+    Returns a tuple: (request_count, tier)
+    - request_count: Current number of requests this week (before incrementing)
+    - tier: 'pdf' (1-3), 'text' (4-5), or 'block' (6+)
+    """
+    now = datetime.now(timezone.utc)
+    # Get Monday of the current week
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # Find or create log entry for this student+week
+    log_entry = session.query(GatePassRequestLog).filter(
+        GatePassRequestLog.student_id == student_id,
+        GatePassRequestLog.week_start_date == week_start
+    ).first()
+    
+    if not log_entry:
+        log_entry = GatePassRequestLog(
+            student_id=student_id,
+            week_start_date=week_start,
+            request_count=1,
+            last_request_date=now
+        )
+        session.add(log_entry)
+        session.commit()
+        logger.info(f"Created new rate limit log for {student_id}, week {week_start.date()}", extra=extra_log)
+        return 1, 'pdf'
+    
+    current_count = log_entry.request_count
+    
+    # Determine tier before incrementing
+    if current_count < 3:
+        tier = 'pdf'
+    elif current_count < 5:
+        tier = 'text'
+    else:
+        tier = 'block'
+    
+    # Increment counter
+    log_entry.request_count += 1
+    log_entry.last_request_date = now
+    session.commit()
+    
+    logger.info(f"Rate limit check for {student_id}: {current_count + 1} requests this week, tier={tier}", extra=extra_log)
+    
+    return current_count + 1, tier
 
 def send_email_fallback(student_id, whatsapp_number, pass_id, expiry_date, s3_key):
     """Placeholder for sending gate pass via email (not implemented)."""
@@ -144,6 +190,16 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
             logger.error(f"Number {whatsapp_number} not registered with WhatsApp", extra=extra_log)
             return {"error": f"Number {whatsapp_number} is not registered with WhatsApp. Please register or contact support."}, 400
 
+        # Check rate limit
+        request_count, tier = check_and_update_rate_limit(session, student_id, extra_log)
+        
+        if tier == 'block':
+            logger.warning(f"Rate limit exceeded for {student_id}: {request_count} requests this week", extra=extra_log)
+            return {
+                "status": "Rate limit exceeded",
+                "message": "You have reached the weekly limit for gate pass requests. Please use the pass sent previously or contact admin@shiningsmilescollege.ac.zw if you need assistance."
+            }, 429
+
         payment_percentage = (payment_amount / total_fees) * 100
         expiry_date = calculate_expiry_date(term, payment_percentage)
         if isinstance(expiry_date, dict) and "error" in expiry_date:
@@ -171,6 +227,33 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
             )
             try:
                 check = requests.get(presigned_url, stream=True, timeout=5)
+                
+                # Tier 2: Send text-only (no PDF) to save bandwidth
+                if tier == 'text':
+                    logger.info(f"Tier 2: Sending text-only gate pass details for {student_id}", extra=extra_log)
+                    message = (
+                        f"Dear {contact.firstname or 'Parent'} {contact.lastname or 'Guardian'},\n"
+                        f"You already have a valid gate pass.\n\n"
+                        f"📋 *Pass Details:*\n"
+                        f"Pass ID: {existing_pass.pass_id}\n"
+                        f"Expires: {existing_pass.expiry_date.strftime('%Y-%m-%d')}\n"
+                        f"Payment: {existing_pass.payment_percentage}%\n\n"
+                        f"⚠️ *Note:* You've requested this pass multiple times this week. To save data, we're sending details only.\n"
+                        f"The PDF was sent with your previous request. If you need the PDF again, contact admin@shiningsmilescollege.ac.zw."
+                    )
+                    whatsapp_response = send_whatsapp_message(whatsapp_number, message)
+                    if whatsapp_response.get("status") != "sent":
+                        logger.error(f"Failed to send text-only message: {whatsapp_response.get('error', 'Unknown error')}", extra=extra_log)
+                    
+                    return {
+                        "status": "Gate pass valid (text-only sent)",
+                        "pass_id": existing_pass.pass_id,
+                        "expiry_date": existing_pass.expiry_date.isoformat(),
+                        "whatsapp_number": whatsapp_number,
+                        "tier": "text"
+                    }, 200
+                
+                # Tier 1: Send PDF as usual
                 if check.status_code == 200:
                     message = (
                         f"Dear {contact.firstname or 'Parent'} {contact.lastname or 'Guardian'},\n"
@@ -179,7 +262,7 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
                         f"Expires: {existing_pass.expiry_date.strftime('%Y-%m-%d')}\n"
                         f"This pass is valid only for {whatsapp_number}. Do not share."
                     )
-                    whatsapp_response = send_whatsapp_message(whatsapp_number, message, media_url=[presigned_url])
+                    whatsapp_response = send_whatsapp_message(whatsapp_number, message, media_url=presigned_url)
                     if whatsapp_response.get("status") != "sent":
                         logger.error(f"Failed to send WhatsApp message: {whatsapp_response.get('error', 'Unknown error')}", extra=extra_log)
                     logger.info(f"Re-sent existing gate pass to {whatsapp_number}", extra=extra_log)
@@ -255,57 +338,73 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
             pdf.add_page()
             pdf.set_auto_page_break(auto=True, margin=15)
             
-            # Add school logo if exists
+            # --- HEADER SECTION ---
+            # Logo (Centered, larger)
             logo_path = "static/school_logo.png"
             if os.path.exists(logo_path):
-                pdf.image(logo_path, x=10, y=8, w=50)
-                
-            # Title
-            pdf.set_font('Helvetica', 'B', 16)
+                # Page width is ~210mm (A4). Center logo: (210 - 40) / 2 = 85
+                pdf.image(logo_path, x=85, y=10, w=40)
+            
+            # Move cursor down for text (Logo height approx 40mm + margin)
+            pdf.set_y(55)
+            
+            # School Name
+            pdf.set_font('Helvetica', 'B', 18)
             pdf.set_text_color(0, 0, 139)  # Dark blue
             pdf.cell(0, 10, 'SHINING SMILES GROUP OF SCHOOLS', ln=True, align='C')
-            pdf.ln(10)
             
-            # Info table with background color
-            pdf.set_fill_color(250, 250, 210)  # Light goldenrod yellow
-            pdf.set_draw_color(128, 128, 128)  # Grey borders
-            pdf.set_font('Helvetica', 'B', 12)
-            pdf.set_text_color(0, 0, 139)  # Dark blue
+            # "GATE PASS" Subtitle
+            pdf.set_font('Helvetica', 'B', 14)
+            pdf.set_text_color(0, 0, 0)  # Black
+            pdf.cell(0, 10, 'OFFICIAL GATE PASS', ln=True, align='C')
+            
+            pdf.ln(10)  # Space before table
+            
+            # --- TABLE SECTION ---
+            pdf.set_fill_color(240, 248, 255)  # AliceBlue (lighter background)
+            pdf.set_draw_color(100, 100, 100)  # Darker grey borders
             
             # Table data
             table_data = [
-                ("Student ID:", str(student_id)),
-                ("Name:", f"{contact.firstname or 'N/A'} {contact.lastname or 'N/A'}"),
-                ("Pass ID:", str(pass_id)),
-                ("Issued:", issued_date.strftime('%Y-%m-%d')),
-                ("Expires:", expiry_date.strftime('%Y-%m-%d')),
-                ("Payment:", f"{payment_percentage:.1f}%"),
-                ("Valid for:", str(whatsapp_number))
+                ("Student ID", str(student_id)),
+                ("Student Name", f"{contact.firstname or 'N/A'} {contact.lastname or 'N/A'}"),
+                ("Pass ID", str(pass_id)),
+                ("Issued Date", issued_date.strftime('%Y-%m-%d')),
+                ("Expiry Date", expiry_date.strftime('%Y-%m-%d')),
+                ("Fee Payment", f"{payment_percentage:.1f}%"),
+                ("Authorized Number", str(whatsapp_number))
             ]
             
+            # Table Header/Rows
             for label, value in table_data:
-                pdf.set_font('Helvetica', 'B', 12)
-                pdf.cell(60, 10, label, border=1, fill=True)
-                pdf.set_font('Helvetica', '', 12)
-                pdf.cell(130, 10, value, border=1, fill=True, ln=True)
+                pdf.set_font('Helvetica', 'B', 11)
+                pdf.set_text_color(50, 50, 50)
+                pdf.cell(60, 12, f"  {label}", border=1, fill=True)  # Indent label
+                
+                pdf.set_font('Helvetica', '', 11)
+                pdf.set_text_color(0, 0, 0)
+                pdf.cell(130, 12, f"  {value}", border=1, fill=False, ln=True) # Indent value
             
-            pdf.ln(10)
+            pdf.ln(15)  # Space after table
             
-            # QR Code
-            if os.path.exists(qr_path):
-                pdf.image(qr_path, x=80, y=pdf.get_y(), w=50, h=50)
-                pdf.ln(55)
+            # --- FOOTER SECTION (Signature & QR) ---
+            # Save current Y position
+            y_position = pdf.get_y()
             
-            # Signature if exists
+            # Signature (Left)
             signature_path = "static/signature.png"
             if os.path.exists(signature_path):
-                pdf.ln(5)
-                pdf.set_font('Helvetica', '', 12)
-                pdf.cell(0, 10, 'Authorized Signature', ln=True)
-                pdf.image(signature_path, x=10, y=pdf.get_y(), w=50, h=12)
-            else:
-                pdf.set_font('Helvetica', '', 12)
-                pdf.cell(0, 10, 'Authorized Signature', ln=True)
+                pdf.set_font('Helvetica', 'I', 10)
+                pdf.text(20, y_position - 2, "Authorized Signature:")
+                pdf.image(signature_path, x=20, y=y_position, w=50)
+                # Draw line under signature
+                pdf.line(20, y_position + 15, 70, y_position + 15)
+            
+            # QR Code (Right)
+            if os.path.exists(qr_path):
+                pdf.image(qr_path, x=140, y=y_position - 5, w=45, h=45)
+                pdf.set_font('Helvetica', '', 8)
+                pdf.text(145, y_position + 42, "Scan to Verify")
             
             # Save PDF
             pdf.output(pdf_path)
@@ -367,7 +466,7 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
                 f"Expires: {expiry_date.strftime('%Y-%m-%d')}\n"
                 f"This pass is valid only for {whatsapp_number}. Do not share."
             )
-            whatsapp_response = send_whatsapp_message(whatsapp_number, message, media_url=[presigned_url])
+            whatsapp_response = send_whatsapp_message(whatsapp_number, message, media_url=presigned_url)
             if whatsapp_response.get("status") != "sent":
                 raise Exception(f"WhatsApp message failed: {whatsapp_response.get('error', 'Unknown error')}")
             logger.info(f"Gate pass PDF sent to {whatsapp_number}", extra=extra_log)
@@ -406,24 +505,54 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
     finally:
         session.remove()
 
-def verify_gatepass(pass_id, incoming_number):
+def render_template_string(template_name, **kwargs):
+    """
+    Render a Jinja2 template without a Flask application context.
+    Assumes templates are in the 'templates' directory relative to the project root.
+    """
+    try:
+        from jinja2 import Environment, FileSystemLoader
+        # Determine the path to the templates directory
+        # Assuming this file is in src/services/, templates are in templates/ (root)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(current_dir))
+        template_dir = os.path.join(project_root, 'templates')
+        
+        # Fallback if not found (e.g. in Lambda structure)
+        if not os.path.exists(template_dir):
+            # Try relative to current file
+            template_dir = os.path.join(os.path.dirname(current_dir), 'templates')
+        
+        if not os.path.exists(template_dir):
+             # Try /var/task/templates (Lambda default)
+            template_dir = '/var/task/templates'
+
+        env = Environment(loader=FileSystemLoader(template_dir))
+        template = env.get_template(template_name)
+        return template.render(**kwargs)
+    except Exception as e:
+        logger.error(f"Template rendering failed: {str(e)}")
+        # Fallback to simple string if Jinja fails
+        return f"<html><body><h1>Error</h1><p>{kwargs.get('message', 'An error occurred')}</p></body></html>"
+
+def verify_gatepass(pass_id, incoming_number, return_json=False):
     session = init_db()
     extra_log = {"pass_id": pass_id, "incoming_number": incoming_number}
     try:
         if not pass_id or not incoming_number:
             logger.error("Missing pass_id or whatsapp_number", extra=extra_log)
-            if request.accept_mimetypes.accept_json:
+            if return_json:
                 return {"error": "Missing pass ID or WhatsApp number"}, 400
             else:
-                return render_template("error.html", message="Missing pass ID or WhatsApp number"), 400
+                return render_template_string("error.html", message="Missing pass ID or WhatsApp number"), 400
 
         gate_pass = session.query(GatePass).filter_by(pass_id=pass_id).first()
         if not gate_pass:
             logger.error(f"Gate pass ID not found: {pass_id}", extra=extra_log)
-            if request.accept_mimetypes.accept_json:
+            if return_json:
                 return {"error": "Gate pass not found"}, 404
             else:
-                return render_template("error.html", message="Gate pass not found"), 404
+                return render_template_string("error.html", message="Gate pass not found"), 404
         
         expiry = gate_pass.expiry_date
         if expiry.tzinfo is None:
@@ -431,10 +560,10 @@ def verify_gatepass(pass_id, incoming_number):
 
         if expiry < datetime.now(timezone.utc):
             logger.error(f"Gate pass {pass_id} expired on {expiry}", extra=extra_log)
-            if request.accept_mimetypes.accept_json:
+            if return_json:
                 return {"error": "Gate pass expired"}, 410
             else:
-                return render_template("error.html", message="Gate pass expired"), 410
+                return render_template_string("error.html", message="Gate pass expired"), 410
 
         student = session.query(StudentContact).filter_by(student_id=gate_pass.student_id).first()
         student_name = f"{student.firstname or ''} {student.lastname or ''}".strip() if student else "Unknown"
@@ -453,7 +582,7 @@ def verify_gatepass(pass_id, incoming_number):
             logger.warning(f"Gate pass {pass_id} accessed by unregistered number {incoming_number}", extra=extra_log)
             warning = "This gate pass is not valid for your phone number."
 
-        if request.accept_mimetypes.accept_json:
+        if return_json:
             return {
                 "status": "valid",
                 "student_id": gate_pass.student_id,
@@ -465,7 +594,7 @@ def verify_gatepass(pass_id, incoming_number):
                 "warning": warning
             }, 200
         else:
-            return render_template(
+            return render_template_string(
                 "verify_gatepass.html",
                 status="valid",
                 student_id=gate_pass.student_id,
@@ -479,9 +608,9 @@ def verify_gatepass(pass_id, incoming_number):
 
     except Exception as e:
         logger.error(f"Error verifying gate pass: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
-        if request.accept_mimetypes.accept_json:
+        if return_json:
             return {"error": f"Internal Server Error: {str(e)}"}, 500
-        return render_template("error.html", message=f"Internal Server Error: {str(e)}"), 500
+        return render_template_string("error.html", message=f"Internal Server Error: {str(e)}"), 500
     finally:
         session.remove()
 
