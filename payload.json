@@ -1,0 +1,4 @@
+{
+    "source": "aws.events",
+    "action": "sync_profiles"
+}

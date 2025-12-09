@@ -63,7 +63,7 @@ echo "📊 Package size: $(du -h final-deployment.zip | cut -f1)"
 echo "⏱️  Updating Lambda timeout to 60 seconds..."
 aws lambda update-function-configuration \
     --function-name $FUNCTION_NAME \
-    --timeout 60 \
+    --timeout 900 \
     --region $REGION
 
 echo "⏳ Waiting for configuration update..."

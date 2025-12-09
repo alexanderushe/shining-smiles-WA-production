@@ -1,5 +1,5 @@
 {
-  "school_info": "🌟 Shining Smiles School offers quality education from *ECD-A to Form 6*, with both *Zimsec* and *Cambridge* curricula, fostering academic excellence and personal growth.",
+  "school_info": "🌟 Shining Smiles School offers quality education from *ECD-A to Form 6*, with both *Zimsec* and *Cambridge* curricula, fostering academic excellence and personal growth. Student Teacher Ratio: 1:25.",
   "website": "🌐 www.shiningsmilescollege.ac.zw",
   "contacts": {
     "emails": {
@@ -7,8 +7,12 @@
       "admin": "admin@shiningsmilescollege.ac.zw",
       "head": "head@shiningsmilescollege.ac.zw"
     },
-    "phone": ["+263774373297", "+263773228491"],
-    "whatsapp": "+263788286744"
+    "phone": [
+      "+263774373297",
+      "+263773228491"
+    ],
+    "whatsapp": "+263788286744",
+    "admin_whatsapp": "+263783585183"
   },
   "location": {
     "admin_office": "📍 39 Winson Road, Hatfield, Harare, Zimbabwe.",
@@ -27,9 +31,31 @@
     "late_pickup_penalty": "$10 after 1545h"
   },
   "fees_policy": {
-    "registration_fees": "One-time, paid upon registration. Non-refundable and non-transferable.",
-    "tuition_payment": [
+    "general_info": "Fees vary based on grade level and curriculum. For specific quotations, contact Admin WhatsApp: +263783585183.",
+    "primary_fees": {
+      "assessment_fee": "$20",
+      "registration_fee": "$200 (One-time, non-refundable)",
+      "school_fees": "$400 per term",
+      "ecd_food": "$50 per term"
+    },
+    "high_school_fees": {
+      "registration_fee": "$150 (Once off, non-refundable)",
+      "tuition": {
+        "form_1_2": "$650.00",
+        "form_3_4": "$700.00",
+        "form_5_6": "$750.00"
+      },
+      "practicals": {
+        "form_1_2": "$50.00",
+        "form_3_4": "$50.00"
+      },
+      "pure_sciences": {
+        "form_5_6": "$100.00"
+      }
+    },
+    "payment_terms": [
       "Fees must be paid before the first day of term.",
+      "Installment plan: Minimum 80% required before first day of term.",
       "If paying in instalments: 70% before first day of term, 30% before the 1st of the last month of term (1 March, 1 July, 1 November).",
       "Overpayments carried forward.",
       "Refunds capped at 70%, via original payment method.",
@@ -38,7 +64,18 @@
     "gate_pass_policy": "Issued after confirmation of fees payment. No entry without valid gate pass."
   },
   "transport_policy": {
-    "school_transport": [
+    "routes_and_prices": {
+      "local": "$180 per term",
+      "local_one_way": "$100 per term",
+      "chitungwiza_door_to_door": "$200 per term",
+      "chitungwiza_bus_stop": "$180 per term",
+      "chitungwiza_one_way_bus_stop": "$100 per term",
+      "chitungwiza_one_way_door_to_door": "$120 per term",
+      "city": "$200 per term",
+      "city_one_way": "$100 per term",
+      "northern_suburbs": "$250 per term"
+    },
+    "general_rules": [
       "Fares announced a month before term.",
       "Must be paid in advance (installments allowed: 3 per term).",
       "Transport contract valid for the full term once payment is made.",
@@ -56,7 +93,56 @@
       "Decent clothing encouraged when dropping/picking learners"
     ]
   },
+  "enrollment_requirements": {
+    "primary": [
+      "Copy of child's birth certificate",
+      "Copy of parent/guardian ID"
+    ],
+    "high_school": {
+      "form_1": [
+        "Copy of Birth certificate",
+        "Grade 7 result slip or entrance test results"
+      ],
+      "form_2_4": [
+        "Previous report book/cards",
+        "A transfer letter"
+      ],
+      "a_level": [
+        "O-Level Result Slip",
+        "Copy of ID",
+        "Form 4 Report Card"
+      ],
+      "other_requirements": [
+        "Medical History if necessary",
+        "Copy of ID Parent or Guardian",
+        "All new students required to fill in the admission form (done by parent or guardian)"
+      ]
+    }
+  },
   "uniform_policy": {
+    "pricing": {
+      "summer_complete_set": "$270",
+      "winter_complete_set": "$90",
+      "purchase_location": "ECD Centre No. 39 Winston South Road Hatfield"
+    },
+    "weekly_dress_code": {
+      "monday": "No.1 Uniform",
+      "tuesday": "Tracksuits",
+      "wednesday": "No.1 Uniform",
+      "thursday": "Sports attire",
+      "friday": "No.1 Uniform"
+    },
+    "high_school_wear": {
+      "general": "Plain White Tekkies",
+      "boys_form_1_6": "Black School Shoes & Belt",
+      "girls_form_1_6": "Black School Shoes & Small Studs",
+      "boys_a_level": "Black Formal Shoes & Belt",
+      "girls_a_level": "Black Court Shoes & Small Studs"
+    },
+    "hair_styles": {
+      "boys": "Smart Shave",
+      "girls": "Black Braids, Twist, Carrot (Straight Black) Green or Black Scrunchies. No Tint, No Weaves, No Mabhanzi"
+    },
     "summer": {
       "boys": {
         "mon_wed_fri": "Black shoes, grey shorts, grey shirt, grey socks, tie, blazer/cardigan/jersey, sun hat.",
@@ -93,7 +179,7 @@
       "detailed_answer": "Classes run from 0800h - 1500h daily, earliest drop at 0645h, latest pickup 1545h."
     },
     "how_to_apply": {
-      "short_answer": "📝 Apply via _www.shiningsmilescollege.ac.zw_.",
+      "short_answer": "📝 Apply via _www.shiningsmilescollege.ac.zw_ or visit our offices.",
       "detailed_answer": "You can also email _admin@shiningsmilescollege.ac.zw_ for the admission form and requirements. Registration fees are one-time, non-refundable."
     },
     "what_curriculum_do_you_offer": {
@@ -109,12 +195,12 @@
       "detailed_answer": "Full summer and winter dress codes are detailed in the *uniform_policy* section. Wrong uniforms may result in denied access."
     },
     "how_much_are_the_fees": {
-      "short_answer": "💰 Fees vary by grade. Please request a fee schedule.",
-      "detailed_answer": "70% of term fees must be paid before school opens, 30% before the 1st of the last month of term (1 March, 1 July, 1 Nov). Overpayments roll forward, and refunds are capped at 70%."
+      "short_answer": "💰 Fees vary by grade. Please request a fee schedule or contact Admin.",
+      "detailed_answer": "Primary: $400/term. High School: $650-$750/term. Registration: $200 (Primary), $150 (High School). Contact +263783585183 for quotes."
     },
     "is_transport_provided": {
       "short_answer": "🚍 Yes, we provide school transport for Harare & Chitungwiza.",
-      "detailed_answer": "Fares are gazetted before each term. Payments can be spread across 3 installments. Parents must provide accurate pickup/drop-off addresses and contacts. See *transport_policy* for full terms."
+      "detailed_answer": "Fares range from $100 to $250 depending on route and one-way/return options. See *transport_policy* for full price list."
     },
     "do_you_have_boarding": {
       "short_answer": "🏠 We are currently a *day school only*.",

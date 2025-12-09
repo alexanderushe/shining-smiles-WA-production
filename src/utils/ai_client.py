@@ -109,7 +109,10 @@ def generate_ai_response(user_message: str, context: str = None) -> str:
             contacts = knowledge["contacts"]
             system_prompt += f"📞 **Contacts**: {', '.join(contacts.get('phone', []))}\n"
             system_prompt += f"📧 **Email**: {contacts['emails'].get('general', '')}\n"
-            system_prompt += f"💬 **WhatsApp**: {contacts.get('whatsapp', '')}\n\n"
+            system_prompt += f"💬 **WhatsApp**: {contacts.get('whatsapp', '')}\n"
+            if "admin_whatsapp" in contacts:
+                system_prompt += f"💬 **Admin WhatsApp**: {contacts.get('admin_whatsapp', '')}\n"
+            system_prompt += "\n"
         
         if "location" in knowledge:
             loc = knowledge["location"]
@@ -122,6 +125,51 @@ def generate_ai_response(user_message: str, context: str = None) -> str:
             times = knowledge["operating_times"]
             system_prompt += f"⏰ **School Hours**: {times.get('school_hours', 'TBD')}\n"
             system_prompt += f"Drop-off: {times.get('earliest_drop_off', 'TBD')} | Pick-up: {times.get('latest_pick_up', 'TBD')}\n\n"
+
+        # --- NEW SECTIONS INJECTED ---
+        if "fees_policy" in knowledge:
+            fees = knowledge["fees_policy"]
+            system_prompt += "💰 **Fees & Payment**:\n"
+            system_prompt += f"  - General: {fees.get('general_info', '')}\n"
+            if "primary_fees" in fees:
+                system_prompt += f"  - Primary Fees: {json.dumps(fees['primary_fees'], ensure_ascii=False)}\n"
+            if "high_school_fees" in fees:
+                system_prompt += f"  - High School Fees: {json.dumps(fees['high_school_fees'], ensure_ascii=False)}\n"
+            if "payment_terms" in fees:
+                system_prompt += "  - Payment Terms: " + " ".join(fees['payment_terms']) + "\n"
+            system_prompt += "\n"
+
+        if "transport_policy" in knowledge:
+            trans = knowledge["transport_policy"]
+            system_prompt += "🚍 **Transport**:\n"
+            if "routes_and_prices" in trans:
+                system_prompt += f"  - Routes & Prices: {json.dumps(trans['routes_and_prices'], ensure_ascii=False)}\n"
+            if "general_rules" in trans:
+                system_prompt += f"  - Rules: {json.dumps(trans['general_rules'], ensure_ascii=False)}\n"
+            system_prompt += "\n"
+
+        if "uniform_policy" in knowledge:
+            uni = knowledge["uniform_policy"]
+            system_prompt += "👕 **Uniforms**:\n"
+            if "pricing" in uni:
+                system_prompt += f"  - Pricing: {json.dumps(uni['pricing'], ensure_ascii=False)}\n"
+            if "weekly_dress_code" in uni:
+                system_prompt += f"  - Dress Code: {json.dumps(uni['weekly_dress_code'], ensure_ascii=False)}\n"
+            if "hair_styles" in uni:
+                system_prompt += f"  - Hair Styles: {json.dumps(uni['hair_styles'], ensure_ascii=False)}\n"
+            if "high_school_wear" in uni:
+                 system_prompt += f"  - High School Wear: {json.dumps(uni['high_school_wear'], ensure_ascii=False)}\n"
+            system_prompt += "\n"
+
+        if "enrollment_requirements" in knowledge:
+            enroll = knowledge["enrollment_requirements"]
+            system_prompt += "📝 **Enrollment Requirements**:\n"
+            if "primary" in enroll:
+                system_prompt += f"  - Primary: {', '.join(enroll['primary'])}\n"
+            if "high_school" in enroll:
+                system_prompt += f"  - High School: {json.dumps(enroll['high_school'], ensure_ascii=False)}\n"
+            system_prompt += "\n"
+        # -----------------------------
         
         # Add FAQs reference
         if "faqs" in knowledge:

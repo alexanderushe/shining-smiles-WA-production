@@ -14,7 +14,7 @@ from utils.database import init_db, StudentContact
 from api.sms_client import SMSClient
 
 logger = setup_logger(__name__)
-TERM = "2025-2"  # Current academic term
+TERM = "2025-3"  # Current academic term
 
 
 def send_all_reminders():
