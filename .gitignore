@@ -61,4 +61,4 @@ nat_user_data*.sh
 .current-layer-*
 
 # Keep important config files (remove from ignore if needed)
-# !samconfig.toml  # Uncomment to track SAM config
+# !samconfig.toml  # Uncomment to track SAM configdocker-package/

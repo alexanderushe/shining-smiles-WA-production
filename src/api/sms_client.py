@@ -157,10 +157,10 @@ class SMSClient:
                     raise
                 except ValueError as e:
                     logger.error(f"Error fetching students: {str(e)}", extra={"request_id": self.request_id})
-                    return
+                    raise e
                 except requests.RequestException as e:
                     logger.error(f"Error fetching students: {str(e)}", extra={"request_id": self.request_id})
-                    return
+                    raise e
 
     @limits(calls=10, period=60)
     def get_student_account_statement(self, student_id, term):

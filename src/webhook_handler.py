@@ -799,7 +799,9 @@ def lambda_handler(event, context):
                 import boto3
                 
                 # Get parameters from event
+                # Get parameters from event
                 start_page = event.get("start_page", 1)
+                retry_count = event.get("retry_count", 0)
                 time_limit = event.get("time_limit_seconds", 720)
                 
                 # Run sync with time limit (leave 2 mins buffer for Lambda timeout)
@@ -808,14 +810,25 @@ def lambda_handler(event, context):
                 
                 if result.get("status") == "partial":
                     next_page = result.get("next_page")
-                    print(f"🔄 Sync partial complete. Re-invoking for page {next_page}")
+                    
+                    # Determine if we are retrying the same page or moving forward
+                    if next_page == start_page:
+                        current_retry = retry_count + 1
+                        if current_retry > 2: # Max 2 retries per page
+                             print(f"🛑 Max retries reached for page {start_page}. Stopping recursion.")
+                             return {"statusCode": 200, "body": f"Sync stopped: Max retries for page {start_page}"}
+                        print(f"⚠️ Retrying page {next_page} (Attempt {current_retry}/2)")
+                    else:
+                        current_retry = 0 # Reset retry count if we advanced
+                        print(f"🔄 Sync partial complete. Re-invoking for page {next_page}")
                     
                     # Re-invoke Lambda asynchronously
                     lambda_client = boto3.client('lambda')
                     new_payload = {
                         "source": "aws.events",
                         "action": "sync_profiles",
-                        "start_page": next_page
+                        "start_page": next_page,
+                        "retry_count": current_retry
                     }
                     lambda_client.invoke(
                         FunctionName=context.function_name,
