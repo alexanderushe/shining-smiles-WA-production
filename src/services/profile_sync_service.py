@@ -125,7 +125,8 @@ def sync_student_profiles(max_records=None, min_update_interval_hours=24, start_
                                     guardian_mobile_number=guardian_mobile,
                                     preferred_phone_number=student_mobile,
                                     last_updated=datetime.datetime.now(datetime.timezone.utc),
-                                    last_api_sync=datetime.datetime.now(datetime.timezone.utc)
+                                    last_api_sync=datetime.datetime.now(datetime.timezone.utc),
+                                    created_at=datetime.datetime.now(datetime.timezone.utc)
                                 )
                                 session.add(contact)
                             

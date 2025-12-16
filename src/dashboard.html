@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shining Smiles Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 min-h-screen">
+
+    <!-- Top Navigation -->
+    <nav class="bg-white border-b border-slate-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <span class="ml-2 text-xl font-bold text-slate-800 tracking-tight">Shining Smiles Admin</span>
+                </div>
+                <div class="flex items-center">
+                    <div id="status-indicator"
+                        class="hidden flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
+                        <span class="w-2 h-2 mr-2 bg-green-500 rounded-full"></span>
+                        Connected
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+        <!-- Auth Modal -->
+        <div id="auth-modal"
+            class="fixed inset-0 bg-gray-600 bg-opacity-90 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
+            <div class="bg-white p-8 rounded-xl shadow-2xl w-96">
+                <h2 class="text-2xl font-bold mb-6 text-center text-slate-800">Admin Access</h2>
+                <input type="password" id="admin-key" placeholder="Enter Admin Key"
+                    class="w-full px-4 py-3 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition">
+                <button onclick="authenticate()"
+                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition transform active:scale-95">
+                    Unlock Dashboard
+                </button>
+                <p id="auth-error" class="hidden text-red-500 text-sm mt-3 text-center"></p>
+            </div>
+        </div>
+
+        <!-- Dashboard Content -->
+        <div id="dashboard-content" class="hidden space-y-8">
+
+            <!-- Quick Actions -->
+            <div class="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                <div>
+                    <h2 class="text-lg font-semibold text-slate-800">System Controls</h2>
+                    <p class="text-sm text-slate-500">Manage synchronization jobs</p>
+                </div>
+                <button onclick="triggerSync()" id="sync-btn"
+                    class="flex items-center bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-lg font-medium transition shadow-md hover:shadow-lg">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15">
+                        </path>
+                    </svg>
+                    Trigger Sync Now
+                </button>
+            </div>
+
+            <!-- Stats Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Total Students -->
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100 hover:border-blue-200 transition">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-sm font-medium text-slate-500 uppercase tracking-wider">Total Students</h3>
+                        <div class="p-2 bg-blue-50 rounded-lg text-blue-600">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z">
+                                </path>
+                            </svg>
+                        </div>
+                    </div>
+                    <p class="text-3xl font-bold text-slate-800" id="stat-total">--</p>
+                    <p class="text-sm text-slate-400 mt-2">Verified in Database</p>
+                </div>
+
+                <!-- Daily Activity -->
+                <div
+                    class="bg-white p-6 rounded-xl shadow-sm border border-slate-100 hover:border-green-200 transition">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-sm font-medium text-slate-500 uppercase tracking-wider">Activity Today</h3>
+                        <div class="p-2 bg-green-50 rounded-lg text-green-600">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="flex items-end">
+                        <p class="text-3xl font-bold text-slate-800" id="stat-synced-today">--</p>
+                        <span
+                            class="text-xs text-green-600 font-bold mb-1 ml-2 bg-green-100 px-2 py-0.5 rounded-full">LIVE</span>
+                    </div>
+                    <p class="text-sm text-slate-400 mt-2">Profiles synced or added today</p>
+                </div>
+
+                <!-- Failed Syncs (Attention Needed) -->
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100 hover:border-red-200 transition">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-sm font-medium text-slate-500 uppercase tracking-wider">Attention Needed</h3>
+                        <div class="p-2 bg-red-50 rounded-lg text-red-600">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z">
+                                </path>
+                            </svg>
+                        </div>
+                    </div>
+                    <p class="text-3xl font-bold text-red-600" id="stat-failed">--</p>
+                    <p class="text-sm text-slate-400 mt-2">Unique students failing sync</p>
+                </div>
+            </div>
+
+            <!-- Registration History Chart -->
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-6 mb-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-slate-800">New Registration History</h3>
+                    <div class="text-sm text-slate-400">Past 30 Days</div>
+                </div>
+                <div class="relative h-64 w-full">
+                    <canvas id="registrationChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Detailed Logs -->
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+                <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+                    <h3 class="text-lg font-semibold text-slate-800">Failure Reasons</h3>
+                    <div class="flex space-x-2">
+                        <span id="page-indicator" class="text-xs text-slate-400 self-center hidden">Page 1</span>
+                        <button onclick="nextPage()" class="text-sm text-blue-600 hover:text-blue-800 font-medium">Show
+                            Next 5</button>
+                    </div>
+                </div>
+                <div class="p-0">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left">
+                            <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
+                                <tr>
+                                    <th class="px-6 py-3">Student ID / Error</th>
+                                    <th class="px-6 py-3 text-right">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100 text-sm" id="failures-list">
+                                <tr>
+                                    <td class="px-6 py-4 text-slate-400 italic text-center" colspan="2">Loading data...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Custom Modal -->
+    <div id="custom-modal"
+        class="fixed inset-0 bg-slate-900 bg-opacity-50 flex items-center justify-center hidden z-50 backdrop-blur-sm transition-opacity duration-300">
+        <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4 transform transition-all scale-100">
+            <h3 id="modal-title" class="text-xl font-bold text-slate-800 mb-2">Notice</h3>
+            <p id="modal-message" class="text-slate-600 mb-6 leading-relaxed">Message goes here.</p>
+            <div class="flex justify-end space-x-3">
+                <button id="modal-cancel"
+                    class="hidden px-5 py-2.5 text-slate-500 hover:text-slate-700 font-medium rounded-lg hover:bg-slate-50 transition-colors">Cancel</button>
+                <button id="modal-confirm"
+                    class="px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium shadow-md shadow-blue-200 transition-all">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let chartInstance = null;
+        let allFailures = [];
+        let currentPage = 0;
+        const PAGE_SIZE = 5;
+
+        // Modal Logic
+        let modalConfirmCallback = null;
+        const modal = document.getElementById('custom-modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalMessage = document.getElementById('modal-message');
+        const modalConfirmBtn = document.getElementById('modal-confirm');
+        const modalCancelBtn = document.getElementById('modal-cancel');
+
+        function showModal(title, message, onConfirm = null, isConfirm = false) {
+            modalTitle.innerText = title;
+            modalMessage.innerHTML = message;
+            modalConfirmCallback = onConfirm;
+
+            if (isConfirm) {
+                modalCancelBtn.classList.remove('hidden');
+                modalConfirmBtn.innerText = "Confirm";
+            } else {
+                modalCancelBtn.classList.add('hidden');
+                modalConfirmBtn.innerText = "OK";
+            }
+
+            modal.classList.remove('hidden');
+        }
+
+        function closeModal() {
+            modal.classList.add('hidden');
+            modalConfirmCallback = null;
+        }
+
+        modalConfirmBtn.onclick = () => {
+            if (modalConfirmCallback) modalConfirmCallback();
+            closeModal();
+        };
+
+        modalCancelBtn.onclick = closeModal;
+
+        // Auth
+        function authenticate() {
+            const key = document.getElementById('admin-key').value;
+            if (!key) return;
+            localStorage.setItem('admin_key', key);
+            fetchStats(true);
+        }
+
+        // Pagination
+        function renderFailures() {
+            const list = document.getElementById('failures-list');
+            const pageIndicator = document.getElementById('page-indicator');
+            list.innerHTML = '';
+
+            if (allFailures.length === 0) {
+                list.innerHTML = '<tr><td colspan="2" class="px-6 py-4 text-green-600 text-center">No recent failures found! System healthy.</td></tr>';
+                pageIndicator.classList.add('hidden');
+                return;
+            }
+
+            const totalPages = Math.ceil(allFailures.length / PAGE_SIZE);
+            if (currentPage >= totalPages) currentPage = 0; // Wrap around
+
+            const start = currentPage * PAGE_SIZE;
+            const chunk = allFailures.slice(start, start + PAGE_SIZE);
+
+            chunk.forEach(reason => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td class="px-6 py-4 font-mono text-slate-600">${reason}</td>
+                    <td class="px-6 py-4 text-right"><span class="px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-600">Failed</span></td>
+                `;
+                list.appendChild(row);
+            });
+
+            // Update Indicator
+            pageIndicator.innerText = `Showing ${start + 1}-${Math.min(start + PAGE_SIZE, allFailures.length)} of ${allFailures.length}`;
+            pageIndicator.classList.remove('hidden');
+        }
+
+        function nextPage() {
+            const totalPages = Math.ceil(allFailures.length / PAGE_SIZE);
+            if (allFailures.length === 0) {
+                fetchStats(); // Logic to fetch if empty
+                return;
+            }
+            currentPage++;
+            if (currentPage >= totalPages) {
+                // If we wrapped, maybe we want to fetch fresh data?
+                // For now, let's just loop locally as requested ("cycle data")
+                // but if users want "more data" from server, they can refresh browser or we can add a hard refresh.
+                // The prompt says "refreshed data must show more data (5) until done".
+                // We'll loop continuously.
+                currentPage = 0;
+                fetchStats(); // Also fetch fresh data when wrapping around to be smart
+            } else {
+                renderFailures();
+            }
+        }
+
+        // Chart
+        function renderChart(historyData) {
+            const ctx = document.getElementById('registrationChart').getContext('2d');
+            const labels = historyData.map(d => d.date);
+            const dataPoints = historyData.map(d => d.count);
+
+            if (chartInstance) chartInstance.destroy();
+
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'New Students',
+                        data: dataPoints,
+                        borderColor: '#2563EB',
+                        backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                        borderWidth: 2,
+                        tension: 0.4,
+                        fill: true,
+                        pointBackgroundColor: '#FFFFFF',
+                        pointBorderColor: '#2563EB',
+                        pointRadius: 4,
+                        pointHoverRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function (context) { return `New Students: ${context.parsed.y}`; }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { borderDash: [2, 4] } },
+                        x: { grid: { display: false } }
+                    }
+                }
+            });
+        }
+
+        async function fetchStats(isAuthCheck = false) {
+            const key = localStorage.getItem('admin_key');
+            if (!key && !isAuthCheck) {
+                showAuth();
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/admin/stats?key=${key}`);
+
+                if (response.status === 401 || response.status === 403) {
+                    if (isAuthCheck) {
+                        document.getElementById('auth-error').innerText = "Invalid Admin Key";
+                        document.getElementById('auth-error').classList.remove('hidden');
+                    }
+                    localStorage.removeItem('admin_key');
+                    return;
+                }
+
+                if (!response.ok) throw new Error("Failed to fetch");
+
+                const data = await response.json();
+
+                document.getElementById('auth-modal').classList.add('hidden');
+                document.getElementById('dashboard-content').classList.remove('hidden');
+                document.getElementById('status-indicator').classList.remove('hidden');
+
+                document.getElementById('stat-total').innerText = (data.total_students_in_db || 0).toLocaleString();
+
+                const failed = data.total_failed_syncs || 0;
+                document.getElementById('stat-failed').innerText = failed.toLocaleString();
+                if (failed === 0) {
+                    document.getElementById('stat-failed').classList.remove('text-red-600');
+                    document.getElementById('stat-failed').classList.add('text-green-600');
+                } else {
+                    document.getElementById('stat-failed').classList.remove('text-green-600');
+                    document.getElementById('stat-failed').classList.add('text-red-600');
+                }
+
+                document.getElementById('stat-synced-today').innerText = (data.students_synced_today || 0).toLocaleString();
+
+                if (data.registration_history) renderChart(data.registration_history);
+
+                // Handle Failures
+                if (data.recent_failure_reasons) {
+                    allFailures = data.recent_failure_reasons;
+                    // Reset to page 0 on fresh fetch? 
+                    // Or keep position? Let's reset to show "fresh" top results
+                    if (!isAuthCheck) {
+                        // Only reset page if it's a manual refresh or first load, 
+                        // but `fetchStats` is called on load.
+                        // We'll keep currentPage unless it's out of bounds, but for UX 'fresh' is usually page 0.
+                        // However, if we do logic in nextPage() to fetch when wrapping, we might want to stay on page 0.
+                        // Let's reset for simplicity.
+                        currentPage = 0;
+                    }
+                    renderFailures();
+                }
+
+            } catch (e) {
+                console.error(e);
+                if (!isAuthCheck) showModal("Error", "Error connecting to server.");
+            }
+        }
+
+        async function triggerSync() {
+            const key = localStorage.getItem('admin_key');
+
+            showModal("Confirm Sync", "Are you sure you want to force a sync now? <br><br><b>Note:</b> This process runs in the background and may take up to 15 minutes.", async () => {
+                const btn = document.getElementById('sync-btn');
+                const originalText = btn.innerHTML;
+                btn.disabled = true;
+                btn.innerHTML = `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Starting...`;
+
+                try {
+                    const response = await fetch(`${API_BASE}/admin/trigger-sync`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ key: key })
+                    });
+
+                    const res = await response.json();
+
+                    if (response.ok) {
+                        showModal("Sync Started", "Sync triggered successfully! It is running in the background.");
+                    } else {
+                        showModal("Error", "Failed: " + (res.error || "Unknown error"));
+                    }
+                } catch (e) {
+                    showModal("Error", "Error: " + e.message);
+                } finally {
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                }
+            }, true);
+        }
+
+        function showAuth() {
+            document.getElementById('auth-modal').classList.remove('hidden');
+            document.getElementById('dashboard-content').classList.add('hidden');
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const key = localStorage.getItem('admin_key');
+            if (key) {
+                fetchStats();
+            } else {
+                showAuth();
+            }
+        });
+    </script>
+</body>
+
+</html>

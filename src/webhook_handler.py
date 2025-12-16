@@ -845,9 +845,7 @@ def lambda_handler(event, context):
                 return {"statusCode": 200, "body": result}
 
             elif action == "check_health":
-                import requests
-                import boto3
-                import os
+                # Imports available globally
                 
                 # 1. Check Internet
                 try:
@@ -885,6 +883,28 @@ def lambda_handler(event, context):
                     # Return 500 with error message so we can see it in response body
                     return {"statusCode": 500, "body": f"Health Check Failed: S3 Error: {str(e)}"}
                 
+            elif action == "check_db_stats":
+                from utils.database import init_db, StudentContact, FailedSync
+                session = init_db()
+                try:
+                    total_students = session.query(StudentContact).count()
+                    failed_syncs = session.query(FailedSync).count()
+                    recent_failures = session.query(FailedSync).order_by(FailedSync.timestamp.desc()).limit(5).all()
+                    
+                    failure_details = [f"{f.student_id}: {f.error}" for f in recent_failures]
+                    
+                    stats = {
+                        "total_students_in_db": total_students,
+                        "total_failed_syncs": failed_syncs,
+                        "recent_failure_reasons": failure_details
+                    }
+                    print(f"📊 DB Stats: {stats}")
+                    return {"statusCode": 200, "body": json.dumps(stats)}
+                except Exception as e:
+                    return {"statusCode": 500, "body": f"Error checking stats: {str(e)}"}
+                finally:
+                    session.close()
+
             else:
                 print(f"⚠️ Unknown scheduled action: {action}")
                 return {"statusCode": 400, "body": f"Unknown action: {action}"}
@@ -903,8 +923,111 @@ def lambda_handler(event, context):
     if http_method == 'GET':
         # Check for specific paths
         path = event.get('rawPath', '/')
-        query = event.get('queryStringParameters', {})
+        query = event.get('queryStringParameters', {}) or {}  # Fix: Ensure query is a dict
         
+        # Admin Dashboard Routes
+        if path == '/admin':
+            print("🎯 DEBUG: Serve Admin Dashboard")
+            try:
+                with open(os.path.join(os.path.dirname(__file__), 'dashboard.html'), 'r') as f:
+                    html_content = f.read()
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'text/html'},
+                    'body': html_content
+                }
+            except Exception as e:
+                return {'statusCode': 500, 'body': f"Error loading dashboard: {str(e)}"}
+
+        if path == '/admin/stats':
+            print("🎯 DEBUG: Admin Stats Request")
+            # Auth Check
+            admin_key = query.get('key')
+            expected_key = os.getenv("ADMIN_SECRET", "admin123")
+            if admin_key != expected_key:
+                return {'statusCode': 401, 'body': 'Unauthorized'}
+
+            from utils.database import init_db, StudentContact, FailedSync
+            from sqlalchemy import func, distinct, text
+            from datetime import datetime, timezone, timedelta
+
+            session = init_db()
+            try:
+                # 1. Total Verified Students
+                total_students = session.query(StudentContact).count()
+                
+                # 2. Unique Failures (Attention Needed)
+                # We count distinct student_ids in FailedSync that are NOT in StudentContact (optional, or just distinct)
+                # For safety/speed, let's just count distinct student_ids in FailedSync
+                unique_failures_count = session.query(func.count(distinct(FailedSync.student_id))).scalar()
+                
+                # 3. Synced Today (Activity)
+                today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                synced_today = session.query(StudentContact).filter(StudentContact.last_updated >= today_start).count()
+                
+                # 4. Recent Unique Failures
+                recent_failures = session.query(FailedSync).order_by(FailedSync.timestamp.desc()).limit(200).all()
+                
+                seen_failed_ids = set()
+                failure_details = []
+                for f in recent_failures:
+                    if f.student_id not in seen_failed_ids:
+                        failure_details.append(f"{f.student_id}: {f.error}")
+                        seen_failed_ids.add(f.student_id)
+                    if len(failure_details) >= 50:
+                        break
+                
+                # 5. Registration History (Last 30 Days)
+                # Using pure SQL for date truncation as it's cleaner/faster
+                history_query = text("""
+                    SELECT date(timezone('Z', created_at)) as day, count(*) 
+                    FROM student_contacts 
+                    WHERE created_at >= NOW() - INTERVAL '30 days'
+                    GROUP BY day 
+                    ORDER BY day ASC;
+                """)
+                registration_history = []
+                try:
+                    result = session.execute(history_query).fetchall()
+                    # Format as [{"date": "2024-01-01", "count": 5}, ...]
+                    for row in result:
+                         # pg8000 might return date object or string depending on driver version
+                         day_val = row[0]
+                         if isinstance(day_val, datetime): 
+                             day_str = day_val.strftime("%Y-%m-%d")
+                         else:
+                             day_str = str(day_val)
+                         
+                         registration_history.append({
+                             "date": day_str,
+                             "count": row[1]
+                         })
+                except Exception as hist_e:
+                    print(f"History query warning: {hist_e}")
+                    # Fallback if created_at is missing (should not happen after migration)
+                    pass
+
+                stats = {
+                    "total_students_in_db": total_students,
+                    "total_failed_syncs": unique_failures_count, 
+                    "students_synced_today": synced_today,
+                    "date": today_start.strftime("%Y-%m-%d"),
+                    "recent_failure_reasons": failure_details,
+                    "registration_history": registration_history
+                }
+                return {
+                    'statusCode': 200, 
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps(stats, default=str)
+                }
+            except Exception as e:
+                return {'statusCode': 500, 'body': f"Error: {str(e)}"}
+            finally:
+                session.close()
+
         if path == '/verify-gatepass':
             print("🎯 DEBUG: Handling Gate Pass Verification")
             from services.gatepass_service import verify_gatepass
@@ -949,6 +1072,81 @@ def lambda_handler(event, context):
             return {'statusCode': 403, 'body': 'Verification failed'}
 
     elif http_method == 'POST':
+        path = event.get('rawPath', '/')
+        
+        # Admin Sync Trigger
+        if path == '/admin/trigger-sync':
+            print("🎯 DEBUG: Admin Sync Trigger")
+            try:
+                body = json.loads(event.get('body', '{}'))
+                admin_key = body.get('key')
+                expected_key = os.getenv("ADMIN_SECRET", "admin123")
+                
+                if admin_key != expected_key:
+                    return {'statusCode': 401, 'body': json.dumps({"error": "Unauthorized"})}
+                
+                # Trigger Sync asynchronously via Lambda invoke (same as scheduler)
+                import boto3
+                lambda_client = boto3.client('lambda')
+                payload = {
+                    "source": "aws.events",
+                    "action": "sync_profiles"
+                }
+                lambda_client.invoke(
+                    FunctionName=context.function_name,
+                    InvocationType='Event', # Async
+                    Payload=json.dumps(payload)
+                )
+                
+                return {
+                    'statusCode': 200, 
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({"status": "started", "message": "Sync job triggered in background"})
+                }
+            except Exception as e:
+                return {'statusCode': 500, 'body': json.dumps({"error": str(e)})}
+
+        # Admin Migrate Schema
+        if path == '/admin/migrate':
+            print("🎯 DEBUG: Admin Schema Migration")
+            try:
+                body = json.loads(event.get('body', '{}'))
+                admin_key = body.get('key')
+                expected_key = os.getenv("ADMIN_SECRET", "admin123")
+                
+                if admin_key != expected_key:
+                    return {'statusCode': 401, 'body': json.dumps({"error": "Unauthorized"})}
+                
+                from utils.database import init_db
+                from sqlalchemy import text
+                session = init_db()
+                try:
+                    # Check if column exists
+                    check_query = text("SELECT column_name FROM information_schema.columns WHERE table_name='student_contacts' AND column_name='created_at';")
+                    result = session.execute(check_query).fetchone()
+                    
+                    if not result:
+                        print("Run migration: Adding created_at column")
+                        session.execute(text("ALTER TABLE student_contacts ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW();"))
+                        session.commit()
+                        msg = "Migration successful: Added created_at column."
+                    else:
+                        msg = "Migration skipped: Column created_at already exists."
+                        
+                    return {
+                        'statusCode': 200, 
+                        'headers': {'Content-Type': 'application/json'},
+                        'body': json.dumps({"status": "success", "message": msg})
+                    }
+                except Exception as db_err:
+                    session.rollback()
+                    return {'statusCode': 500, 'body': json.dumps({"error": f"DB Error: {str(db_err)}"}) }
+                finally:
+                    session.close()
+
+            except Exception as e:
+                return {'statusCode': 500, 'body': json.dumps({"error": str(e)})}
+
         # Message processing - no verification needed for POST
         print("🎯 DEBUG: Handling POST request (message processing)")
         try:

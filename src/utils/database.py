@@ -28,6 +28,7 @@ class StudentContact(Base):
     outstanding_balance = Column(Float, nullable=True)
     last_updated = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
     last_api_sync = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
     last_total_paid = Column(Float, default=0.0)
 
 class GatePass(Base):

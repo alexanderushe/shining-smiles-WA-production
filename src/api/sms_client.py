@@ -71,7 +71,7 @@ class SMSClient:
         for attempt in range(3):
             try:
                 logger.debug(f"Requesting {url} | Params: {params} | Headers: {self.headers}", extra=extra_log)
-                response = requests.get(url, headers=self.headers, params=params, timeout=10, verify=self.verify_ssl)
+                response = requests.get(url, headers=self.headers, params=params, timeout=60, verify=self.verify_ssl)
                 logger.debug(f"Response [{response.status_code}]: {response.text}", extra=extra_log)
                 response.raise_for_status()
                 return self.safe_json_response(response)
@@ -142,7 +142,12 @@ class SMSClient:
         while url:
             for attempt in range(3):
                 try:
-                    params = {"page": page, "page_size": page_size}
+                    # Avoid duplicating params if we are following a 'next' link (absolute URL)
+                    if url.startswith("http"):
+                        params = {}
+                    else:
+                        params = {"page": page, "page_size": page_size}
+                    
                     data = self._get(url, params=params)
                     if data.get("error"):
                         logger.error(f"Error in response: {data['error']}", extra={"request_id": self.request_id})
