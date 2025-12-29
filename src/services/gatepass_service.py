@@ -140,6 +140,95 @@ def send_email_fallback(student_id, whatsapp_number, pass_id, expiry_date, s3_ke
     finally:
         session.remove()
 
+def fetch_and_create_student_contact(student_id, session, sms_client, extra_log):
+    """
+    JIT (Just-In-Time) profile sync: Fetch student profile from SMS API and create local database record.
+    
+    This eliminates the 24-hour wait for new students by fetching their profile on-demand
+    when a gatepass is requested. The SMS system already has verified data immediately
+    after registration at the admin office.
+    
+    Args:
+        student_id: Student ID (e.g., SSC20257279)
+        session: Database session
+        sms_client: SMSClient instance
+        extra_log: Extra logging context
+        
+    Returns:
+        StudentContact object if successful, None otherwise
+    """
+    def sanitize_phone_number(phone):
+        """Sanitize and validate phone number format."""
+        if not phone or phone == "nan" or str(phone).strip() == "":
+            return None
+        # Remove spaces, dashes, brackets
+        cleaned = "".join(c for c in str(phone) if c.isdigit() or c == '+')
+        if not cleaned:
+            return None
+        # Ensure +263 format
+        if not cleaned.startswith("+"):
+            if cleaned.startswith("0"):
+                cleaned = "+263" + cleaned[1:]
+            elif len(cleaned) == 9:  # e.g. 771234567
+                cleaned = "+263" + cleaned
+        return cleaned if len(cleaned) >= 12 else None
+
+    try:
+        logger.info(f"[JIT Sync] Fetching profile from SMS API for {student_id}", extra=extra_log)
+        
+        # Fetch student profile from SMS API
+        profile_response = sms_client.get_student_profile(student_id)
+        
+        if not profile_response or "data" not in profile_response:
+            logger.error(f"[JIT Sync] No profile found in SMS API for {student_id}", extra=extra_log)
+            return None
+        
+        profile_data = profile_response["data"]
+        
+        # Extract and validate data
+        firstname = profile_data.get("firstname", "")
+        lastname = profile_data.get("lastname", "")
+        raw_student_mobile = profile_data.get("student_mobile") or profile_data.get("student_mobile_number")
+        raw_guardian_mobile = profile_data.get("guardian_mobile_number")
+        
+        # Sanitize phone numbers
+        student_mobile = sanitize_phone_number(raw_student_mobile)
+        guardian_mobile = sanitize_phone_number(raw_guardian_mobile)
+        
+        # Validate required fields
+        if not student_mobile:
+            logger.error(f"[JIT Sync] No valid student_mobile for {student_id}", extra=extra_log)
+            return None
+        
+        # Create StudentContact record
+        contact = StudentContact(
+            student_id=student_id,
+            firstname=firstname,
+            lastname=lastname,
+            student_mobile=student_mobile,
+            guardian_mobile_number=guardian_mobile,
+            preferred_phone_number=student_mobile,
+            last_updated=datetime.now(timezone.utc),
+            last_api_sync=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc)
+        )
+        
+        session.add(contact)
+        session.commit()
+        
+        logger.info(
+            f"[JIT Sync] Successfully created contact for {student_id}: "
+            f"{firstname} {lastname}, phone: {student_mobile}",
+            extra=extra_log
+        )
+        
+        return contact
+        
+    except Exception as e:
+        logger.error(f"[JIT Sync] Failed to fetch/create contact for {student_id}: {str(e)}", extra=extra_log)
+        session.rollback()
+        return None
+
 def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, requesting_whatsapp_number=None):
     session = init_db()
     extra_log = {"request_id": request_id, "student_id": student_id}
@@ -169,8 +258,18 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
 
         contact = session.query(StudentContact).filter_by(student_id=student_id).first()
         if not contact:
-            logger.error(f"No contact found for {student_id}", extra=extra_log)
-            return {"error": "No contact found for student ID"}, 404
+            # JIT Sync: Student not in local DB, fetch from SMS API
+            logger.info(f"Student {student_id} not in local DB, attempting JIT sync", extra=extra_log)
+            sms_client = SMSClient(request_id=request_id, use_cloud_api=True)
+            contact = fetch_and_create_student_contact(student_id, session, sms_client, extra_log)
+            
+            if not contact:
+                logger.error(f"JIT sync failed for {student_id}", extra=extra_log)
+                return {
+                    "error": "Student profile not found. Please ensure the student ID is correct or contact admin@shiningsmilescollege.ac.zw"
+                }, 404
+            
+            logger.info(f"JIT sync successful for {student_id}", extra=extra_log)
 
         # Use the requesting WhatsApp number if provided (the one the user is messaging from)
         # Otherwise fall back to database numbers
