@@ -181,7 +181,7 @@ def fetch_and_create_student_contact(student_id, session, sms_client, extra_log)
         
         if not profile_response or "data" not in profile_response:
             logger.error(f"[JIT Sync] No profile found in SMS API for {student_id}", extra=extra_log)
-            return None
+            return None, None, "Profile not found in SMS system"
         
         profile_data = profile_response["data"]
         
@@ -195,39 +195,57 @@ def fetch_and_create_student_contact(student_id, session, sms_client, extra_log)
         student_mobile = sanitize_phone_number(raw_student_mobile)
         guardian_mobile = sanitize_phone_number(raw_guardian_mobile)
         
-        # Validate required fields
-        if not student_mobile:
-            logger.error(f"[JIT Sync] No valid student_mobile for {student_id}", extra=extra_log)
-            return None
+        # Fallback logic: Use guardian mobile if student mobile is missing
+        preferred_mobile = student_mobile if student_mobile else guardian_mobile
+
+        # Validate required fields (Must have at least one valid number)
+        if not preferred_mobile:
+            logger.error(f"[JIT Sync] No valid mobile number (student or guardian) for {student_id}", extra=extra_log)
+            return None, None, "No valid mobile number found (Student or Guardian)"
         
-        # Create StudentContact record
-        contact = StudentContact(
-            student_id=student_id,
-            firstname=firstname,
-            lastname=lastname,
-            student_mobile=student_mobile,
-            guardian_mobile_number=guardian_mobile,
-            preferred_phone_number=student_mobile,
-            last_updated=datetime.now(timezone.utc),
-            last_api_sync=datetime.now(timezone.utc),
-            created_at=datetime.now(timezone.utc)
-        )
+        # Check if student already exists (UPSERT logic)
+        contact = session.query(StudentContact).filter_by(student_id=student_id).first()
         
-        session.add(contact)
+        if contact:
+            # Update existing record
+            contact.firstname = firstname
+            contact.lastname = lastname
+            contact.student_mobile = student_mobile
+            contact.guardian_mobile_number = guardian_mobile
+            contact.preferred_phone_number = preferred_mobile
+            contact.last_updated = datetime.now(timezone.utc)
+            contact.last_api_sync = datetime.now(timezone.utc)
+            action = "updated"
+        else:
+            # Create new record
+            contact = StudentContact(
+                student_id=student_id,
+                firstname=firstname,
+                lastname=lastname,
+                student_mobile=student_mobile,
+                guardian_mobile_number=guardian_mobile,
+                preferred_phone_number=preferred_mobile,
+                last_updated=datetime.now(timezone.utc),
+                last_api_sync=datetime.now(timezone.utc),
+                created_at=datetime.now(timezone.utc)
+            )
+            session.add(contact)
+            action = "created"
+        
         session.commit()
         
         logger.info(
-            f"[JIT Sync] Successfully created contact for {student_id}: "
-            f"{firstname} {lastname}, phone: {student_mobile}",
+            f"[JIT Sync] Successfully {action} contact for {student_id}: "
+            f"{firstname} {lastname}, preferred: {preferred_mobile}",
             extra=extra_log
         )
         
-        return contact
+        return contact, action, None
         
     except Exception as e:
         logger.error(f"[JIT Sync] Failed to fetch/create contact for {student_id}: {str(e)}", extra=extra_log)
         session.rollback()
-        return None
+        return None, None, f"Database error: {str(e)}"
 
 def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, requesting_whatsapp_number=None):
     session = init_db()
@@ -260,14 +278,14 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
         if not contact:
             # JIT Sync: Student not in local DB, fetch from SMS API
             logger.info(f"Student {student_id} not in local DB, attempting JIT sync", extra=extra_log)
-            sms_client = SMSClient(request_id=request_id, use_cloud_api=True)
-            contact = fetch_and_create_student_contact(student_id, session, sms_client, extra_log)
-            
-            if not contact:
-                logger.error(f"JIT sync failed for {student_id}", extra=extra_log)
-                return {
-                    "error": "Student profile not found. Please ensure the student ID is correct or contact admin@shiningsmilescollege.ac.zw"
-                }, 404
+        sms_client = SMSClient(request_id=request_id, use_cloud_api=True)
+        contact, _, _ = fetch_and_create_student_contact(student_id, session, sms_client, extra_log)
+        
+        if not contact:
+            logger.error(f"JIT sync failed for {student_id}", extra=extra_log)
+            return {
+                "error": "Student profile not found. Please ensure the student ID is correct or contact admin@shiningsmilescollege.ac.zw"
+            }, 404
             
             logger.info(f"JIT sync successful for {student_id}", extra=extra_log)
 

@@ -32,7 +32,7 @@ class Config:
     TERM_END_DATES = {
         "2025-1": datetime(2025, 3, 31, tzinfo=timezone.utc),
         "2025-2": datetime(2025, 7, 31, tzinfo=timezone.utc),
-        "2025-3": datetime(2025, 12, 15, tzinfo=timezone.utc),
+        "2025-3": datetime(2025, 12, 31, tzinfo=timezone.utc),
     }
 
     @classmethod
