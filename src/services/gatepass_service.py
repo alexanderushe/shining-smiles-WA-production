@@ -247,7 +247,7 @@ def fetch_and_create_student_contact(student_id, session, sms_client, extra_log)
         session.rollback()
         return None, None, f"Database error: {str(e)}"
 
-def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, requesting_whatsapp_number=None):
+def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, requesting_whatsapp_number=None, skip_whatsapp=False):
     session = init_db()
     extra_log = {"request_id": request_id, "student_id": student_id}
     try:
@@ -292,30 +292,37 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
         # Use the requesting WhatsApp number if provided (the one the user is messaging from)
         # Otherwise fall back to database numbers
         whatsapp_number = requesting_whatsapp_number or contact.preferred_phone_number or contact.student_mobile
-        if not whatsapp_number:
-            logger.error(f"No valid WhatsApp number for {student_id}", extra=extra_log)
-            return {"error": "No valid WhatsApp number found for this student"}, 400
-
-        # Validate WhatsApp number format
-        if not re.match(r'^\+\d{10,15}$', whatsapp_number):
-            logger.error(f"Invalid WhatsApp number format: {whatsapp_number}", extra=extra_log)
-            return {"error": f"Invalid WhatsApp number format for {whatsapp_number} (expected + followed by 10-15 digits)"}, 400
-
-        # Check WhatsApp registration
-        sms_client = SMSClient(request_id=request_id, use_cloud_api=True)
-        if not sms_client.check_whatsapp_number(whatsapp_number):
-            logger.error(f"Number {whatsapp_number} not registered with WhatsApp", extra=extra_log)
-            return {"error": f"Number {whatsapp_number} is not registered with WhatsApp. Please register or contact support."}, 400
-
-        # Check rate limit
-        request_count, tier = check_and_update_rate_limit(session, student_id, extra_log)
         
-        if tier == 'block':
-            logger.warning(f"Rate limit exceeded for {student_id}: {request_count} requests this week", extra=extra_log)
-            return {
-                "status": "Rate limit exceeded",
-                "message": "You have reached the weekly limit for gate pass requests. Please use the pass sent previously or contact admin@shiningsmilescollege.ac.zw if you need assistance."
-            }, 429
+        # For admin-generated passes (skip_whatsapp=True), we don't need a valid WhatsApp number
+        if not skip_whatsapp:
+            if not whatsapp_number:
+                logger.error(f"No valid WhatsApp number for {student_id}", extra=extra_log)
+                return {"error": "No valid WhatsApp number found for this student"}, 400
+
+            # Validate WhatsApp number format
+            if not re.match(r'^\+\d{10,15}$', whatsapp_number):
+                logger.error(f"Invalid WhatsApp number format: {whatsapp_number}", extra=extra_log)
+                return {"error": f"Invalid WhatsApp number format for {whatsapp_number} (expected + followed by 10-15 digits)"}, 400
+
+            # Check WhatsApp registration
+            sms_client = SMSClient(request_id=request_id, use_cloud_api=True)
+            if not sms_client.check_whatsapp_number(whatsapp_number):
+                logger.error(f"Number {whatsapp_number} not registered with WhatsApp", extra=extra_log)
+                return {"error": f"Number {whatsapp_number} is not registered with WhatsApp. Please register or contact support."}, 400
+
+            # Check rate limit (only for WhatsApp requests, not admin-generated)
+            request_count, tier = check_and_update_rate_limit(session, student_id, extra_log)
+            
+            if tier == 'block':
+                logger.warning(f"Rate limit exceeded for {student_id}: {request_count} requests this week", extra=extra_log)
+                return {
+                    "status": "Rate limit exceeded",
+                    "message": "You have reached the weekly limit for gate pass requests. Please use the pass sent previously or contact admin@shiningsmilescollege.ac.zw if you need assistance."
+                }, 429
+        else:
+            # For admin-generated passes, use a placeholder number if none exists
+            if not whatsapp_number:
+                whatsapp_number = "ADMIN_GENERATED"
 
         payment_percentage = (payment_amount / total_fees) * 100
         expiry_date = calculate_expiry_date(term, payment_percentage)
@@ -571,6 +578,19 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
             ExpiresIn=expiry_seconds
         )
 
+        # Skip WhatsApp sending for admin-generated passes
+        if skip_whatsapp:
+            logger.info(f"Admin-generated gate pass for {student_id}, skipping WhatsApp delivery", extra=extra_log)
+            return {
+                "status": "Gate pass generated (admin)",
+                "pass_id": pass_id,
+                "expiry_date": expiry_date.isoformat(),
+                "pdf_url": presigned_url,
+                "student_name": f"{contact.firstname or ''} {contact.lastname or ''}".strip(),
+                "payment_percentage": round(payment_percentage, 1)
+            }, 200
+
+        # Send via WhatsApp
         try:
             check = requests.get(presigned_url, stream=True, timeout=5)
             if check.status_code != 200:
@@ -606,6 +626,7 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
                 "status": "Gate pass issued (text fallback)",
                 "pass_id": pass_id,
                 "expiry_date": expiry_date.isoformat(),
+                "pdf_url": presigned_url,
                 "whatsapp_number": whatsapp_number
             }, 200
 
@@ -613,6 +634,7 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
             "status": "Gate pass issued",
             "pass_id": pass_id,
             "expiry_date": expiry_date.isoformat(),
+            "pdf_url": presigned_url,
             "whatsapp_number": whatsapp_number
         }, 200
 

@@ -1276,6 +1276,91 @@ def lambda_handler(event, context):
                 print(f"Error in sync-student: {e}")
                 return {'statusCode': 500, 'body': json.dumps({"error": str(e)})}
 
+        # Admin Manual Gate Pass (for parents without WhatsApp)
+        if path == '/admin/manual-gatepass':
+            print("🎯 DEBUG: Admin Manual Gate Pass")
+            try:
+                body = json.loads(event.get('body', '{}'))
+                admin_key = body.get('key')
+                student_id = body.get('student_id')
+                term = body.get('term')
+                expected_key = os.getenv("ADMIN_SECRET", "admin123")
+                
+                if admin_key != expected_key:
+                    return {'statusCode': 401, 'body': json.dumps({"error": "Unauthorized"})}
+                
+                if not student_id:
+                    return {'statusCode': 400, 'body': json.dumps({"error": "Missing student_id"})}
+                
+                # Auto-detect current term if not provided
+                if not term:
+                    from datetime import date
+                    current_date = date.today()
+                    term = next(
+                        (t for t, start in config.TERM_START_DATES.items() 
+                         if start.date() <= current_date <= config.TERM_END_DATES[t].date()),
+                        "2025-3"  # Fallback
+                    )
+                
+                # Dynamic imports
+                from api.sms_client import SMSClient
+                from services.gatepass_service import generate_gatepass
+                
+                request_id = str(uuid.uuid4())
+                sms_client = SMSClient(request_id=request_id)
+                
+                # Fetch live financial data from SMS API
+                billed_fees = sms_client.get_student_billed_fees(student_id, term)
+                payments = sms_client.get_student_payments(student_id, term)
+                
+                total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
+                total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
+                
+                if total_fees <= 0:
+                    return {
+                        'statusCode': 400, 
+                        'headers': {'Content-Type': 'application/json'},
+                        'body': json.dumps({"error": f"No fees found for {student_id} in term {term}"})
+                    }
+                
+                # Generate gate pass (skip WhatsApp delivery)
+                result, status_code = generate_gatepass(
+                    student_id=student_id,
+                    term=term,
+                    payment_amount=total_paid,
+                    total_fees=total_fees,
+                    request_id=request_id,
+                    requesting_whatsapp_number=None,
+                    skip_whatsapp=True
+                )
+                
+                if status_code == 200 and "pdf_url" in result:
+                    return {
+                        'statusCode': 200, 
+                        'headers': {'Content-Type': 'application/json'},
+                        'body': json.dumps({
+                            "success": True,
+                            "pdf_url": result.get("pdf_url"),
+                            "pass_id": result.get("pass_id"),
+                            "expiry_date": result.get("expiry_date"),
+                            "student_name": result.get("student_name"),
+                            "payment_percentage": result.get("payment_percentage")
+                        })
+                    }
+                else:
+                    # Denied (e.g., payment below 50%)
+                    error_msg = result.get("reason") or result.get("error") or result.get("status") or "Gate pass denied"
+                    return {
+                        'statusCode': status_code, 
+                        'headers': {'Content-Type': 'application/json'},
+                        'body': json.dumps({"success": False, "error": error_msg})
+                    }
+                
+            except Exception as e:
+                print(f"Error in manual-gatepass: {e}")
+                traceback.print_exc()
+                return {'statusCode': 500, 'body': json.dumps({"error": str(e)})}
+
         # Admin Migrate Schema
         if path == '/admin/migrate':
             print("🎯 DEBUG: Admin Schema Migration")

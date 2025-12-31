@@ -32,10 +32,20 @@
                         <span class="w-2 h-2 mr-2 bg-green-500 rounded-full"></span>
                         Connected
                     </div>
+                    <div id="offline-indicator"
+                        class="hidden flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
+                        <span class="w-2 h-2 mr-2 bg-red-500 rounded-full animate-pulse"></span>
+                        Offline
+                    </div>
                 </div>
             </div>
         </div>
     </nav>
+
+    <!-- Offline Banner (hidden by default) -->
+    <div id="offline-banner" class="hidden bg-red-600 text-white text-center py-2 px-4 font-medium">
+        📡 <span class="font-bold">You are offline.</span> Please check your internet connection.
+    </div>
 
     <!-- Main Content -->
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -130,14 +140,25 @@
                                     </span>
                                 </div>
                             </div>
-                            <button onclick="syncSingleStudent()" id="sync-confirm-btn"
-                                class="bg-green-600 hover:bg-green-700 text-white px-6 py-2.5 rounded-lg font-bold transition shadow-md hover:shadow-lg flex items-center gap-2">
-                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                        d="M5 13l4 4L19 7"></path>
-                                </svg>
-                                Confirm & Sync
-                            </button>
+                            <div class="flex flex-col sm:flex-row gap-2 mt-4 sm:mt-0">
+                                <button onclick="syncSingleStudent()" id="sync-confirm-btn"
+                                    class="bg-green-600 hover:bg-green-700 text-white px-5 py-2.5 rounded-lg font-bold transition shadow-md hover:shadow-lg flex items-center justify-center gap-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M5 13l4 4L19 7"></path>
+                                    </svg>
+                                    Sync Profile
+                                </button>
+                                <button onclick="generateManualGatepass()" id="gatepass-btn"
+                                    class="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-lg font-bold transition shadow-md hover:shadow-lg flex items-center justify-center gap-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z">
+                                        </path>
+                                    </svg>
+                                    🖨️ Print Gate Pass
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -586,7 +607,14 @@
 
             } catch (e) {
                 console.error(e);
-                if (!isAuthCheck) showModal("Error", "Error connecting to server.");
+                // Update network status indicator
+                if (!navigator.onLine) {
+                    document.getElementById('status-indicator').classList.add('hidden');
+                    document.getElementById('offline-indicator').classList.remove('hidden');
+                    if (!isAuthCheck) showModal("📡 No Internet Connection", "Please check your network connection and refresh the page.");
+                } else {
+                    if (!isAuthCheck) showModal("⚠️ Connection Issue", "Could not reach the server. Please try again.");
+                }
             }
         }
 
@@ -609,12 +637,17 @@
                     const res = await response.json();
 
                     if (response.ok) {
-                        showModal("Sync Started", "Sync triggered successfully! It is running in the background.");
+                        showModal("✅ Sync Started", "Sync triggered successfully! It is running in the background.");
                     } else {
-                        showModal("Error", "Failed: " + (res.error || "Unknown error"));
+                        showModal("❌ Sync Failed", res.error || "Could not start the sync. Please try again.");
                     }
                 } catch (e) {
-                    showModal("Error", "Error: " + e.message);
+                    console.error('Sync trigger error:', e);
+                    if (!navigator.onLine) {
+                        showModal("📡 No Internet Connection", "Please check your network and try again.");
+                    } else {
+                        showModal("⚠️ Something Went Wrong", "Could not start the sync. Please try again.");
+                    }
                 } finally {
                     btn.disabled = false;
                     btn.innerHTML = originalText;
@@ -729,6 +762,72 @@
             }
         }
 
+        async function generateManualGatepass() {
+            const key = localStorage.getItem('admin_key');
+            const studentIdText = document.getElementById('preview-id').innerText;
+            const inputId = document.getElementById('sync-student-id').value.trim().toUpperCase();
+            const studentId = (studentIdText && studentIdText !== '--') ? studentIdText : inputId;
+
+            if (!studentId) {
+                showModal("Error", "Please search for a student first.");
+                return;
+            }
+
+            const btn = document.getElementById('gatepass-btn');
+            const originalText = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = `<svg class="inline w-4 h-4 animate-spin mr-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Generating...`;
+
+            try {
+                const response = await fetch(`${API_BASE}/admin/manual-gatepass`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: key, student_id: studentId })
+                });
+
+                const res = await response.json();
+
+                if (response.ok && res.success && res.pdf_url) {
+                    // Format expiry date nicely
+                    const expiryDate = res.expiry_date ? res.expiry_date.split('T')[0] : 'N/A';
+
+                    // Try to open PDF in new tab (wrapped in try-catch for safety)
+                    let pdfOpened = false;
+                    try {
+                        if (typeof window !== 'undefined' && window.open) {
+                            const pdfWindow = window.open(res.pdf_url, '_blank');
+                            pdfOpened = !!pdfWindow;
+                        }
+                    } catch (popupErr) {
+                        console.warn('Popup blocked or unavailable:', popupErr);
+                    }
+
+                    // Show modal with clickable link as fallback
+                    showModal("✅ Gate Pass Ready",
+                        `<b>Student:</b> ${res.student_name}<br>` +
+                        `<b>Expires:</b> ${expiryDate}<br>` +
+                        `<b>Payment:</b> ${Math.min(res.payment_percentage, 100)}%<br><br>` +
+                        `<a href="${res.pdf_url}" target="_blank" rel="noopener" class="inline-block mt-2 px-4 py-2 bg-purple-600 text-white rounded-lg font-bold hover:bg-purple-700 transition">` +
+                        `📄 Click Here to Download/Print PDF</a>` +
+                        (pdfOpened ? '' : '<br><br><span class="text-sm text-slate-500">⚠️ Click the button above to open the PDF.</span>')
+                    );
+                } else {
+                    showModal("❌ Gate Pass Denied", res.error || "Could not generate gate pass. The student may not have paid enough fees.");
+                }
+            } catch (e) {
+                console.error('Gate pass error:', e);
+                // User-friendly error message
+                if (!navigator.onLine) {
+                    showModal("📡 No Internet Connection", "Please check your network connection and try again.");
+                } else {
+                    showModal("⚠️ Something Went Wrong", "Could not connect to the server. Please try again in a moment.");
+                }
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+        }
+
         function showAuth() {
             document.getElementById('auth-modal').classList.remove('hidden');
             document.getElementById('dashboard-content').classList.add('hidden');
@@ -736,12 +835,63 @@
 
         document.addEventListener('DOMContentLoaded', () => {
             const key = localStorage.getItem('admin_key');
+
+            // Network status monitoring - uses actual server ping for reliability
+            let isOnline = true;
+
+            async function checkServerConnectivity() {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                    await fetch(`${API_BASE}/admin/stats?key=${key}`, {
+                        method: 'GET',
+                        signal: controller.signal,
+                        cache: 'no-store'
+                    });
+
+                    clearTimeout(timeoutId);
+                    if (!isOnline) {
+                        isOnline = true;
+                        updateNetworkUI(true);
+                    }
+                } catch (e) {
+                    if (isOnline) {
+                        isOnline = false;
+                        updateNetworkUI(false);
+                    }
+                }
+            }
+
+            function updateNetworkUI(online) {
+                const statusIndicator = document.getElementById('status-indicator');
+                const offlineIndicator = document.getElementById('offline-indicator');
+                const offlineBanner = document.getElementById('offline-banner');
+
+                if (online) {
+                    statusIndicator.classList.remove('hidden');
+                    offlineIndicator.classList.add('hidden');
+                    offlineBanner.classList.add('hidden');
+                } else {
+                    statusIndicator.classList.add('hidden');
+                    offlineIndicator.classList.remove('hidden');
+                    offlineBanner.classList.remove('hidden');
+                }
+            }
+
+            // Also listen for browser events as backup
+            window.addEventListener('online', () => checkServerConnectivity());
+            window.addEventListener('offline', () => updateNetworkUI(false));
+
             if (key) {
                 fetchStats();
-                // Auto-refresh every 60 seconds
+                // Auto-refresh every 60 seconds (also serves as connectivity check)
                 autoRefreshInterval = setInterval(() => {
                     fetchStats();
                 }, 60000);
+
+                // Check connectivity every 15 seconds
+                setInterval(checkServerConnectivity, 15000);
             } else {
                 showAuth();
             }
