@@ -39,7 +39,7 @@ class Config:
         # 2025 terms (historical data)
         "2025-1": datetime(2025, 3, 31, tzinfo=timezone.utc),
         "2025-2": datetime(2025, 7, 31, tzinfo=timezone.utc),
-        "2025-3": datetime(2025, 12, 15, tzinfo=timezone.utc),
+        "2025-3": datetime(2025, 12, 31, tzinfo=timezone.utc),
         # 2026 terms (current academic year)
         "2026-1": datetime(2026, 4, 2, tzinfo=timezone.utc),
         "2026-2": datetime(2026, 8, 6, tzinfo=timezone.utc),

@@ -1329,6 +1329,7 @@ def lambda_handler(event, context):
             print("🎯 DEBUG: Admin Stats Request")
             # Auth Check
             admin_key = query.get('key')
+            period = query.get('period', 'today')  # today, yesterday, week, month
             expected_key = os.getenv("ADMIN_SECRET", "admin123")
             if admin_key != expected_key:
                 return {'statusCode': 401, 'body': 'Unauthorized'}
@@ -1339,67 +1340,118 @@ def lambda_handler(event, context):
 
             session = init_db()
             try:
+                now = datetime.now(timezone.utc)
+                
                 # 1. Total Verified Students
                 total_students = session.query(StudentContact).count()
                 
-                # 2. Unique Failures (Attention Needed)
-                # We count distinct student_ids in FailedSync that are NOT in StudentContact (optional, or just distinct)
-                # For safety/speed, let's just count distinct student_ids in FailedSync
+                # 2. Unique Failures
                 unique_failures_count = session.query(func.count(distinct(FailedSync.student_id))).scalar()
                 
-                # 3. Synced Today (Activity)
-                today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-                synced_today = session.query(StudentContact).filter(StudentContact.last_updated >= today_start).count()
+                # 3. Synced Activity (Filtered)
+                if period == 'yesterday':
+                    start_date = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                    end_date = start_date + timedelta(days=1)
+                    synced_count = session.query(StudentContact).filter(
+                        StudentContact.last_updated >= start_date,
+                        StudentContact.last_updated < end_date
+                    ).count()
+                    synced_label = "Activity Yesterday"
+                elif period == 'week':
+                    start_date = now - timedelta(days=7)
+                    synced_count = session.query(StudentContact).filter(StudentContact.last_updated >= start_date).count()
+                    synced_label = "Activity Last 7 Days"
+                elif period == 'month':
+                    start_date = now - timedelta(days=30)
+                    synced_count = session.query(StudentContact).filter(StudentContact.last_updated >= start_date).count()
+                    synced_label = "Activity Last 30 Days"
+                else: # today (default)
+                    start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                    synced_count = session.query(StudentContact).filter(StudentContact.last_updated >= start_date).count()
+                    synced_label = "Activity Today"
                 
-                # 4. Recent Unique Failures
-                recent_failures = session.query(FailedSync).order_by(FailedSync.timestamp.desc()).limit(200).all()
+                # 4. Recent Unique Failures with Details (Left Join)
+                # Fetch Name if available in StudentContact
+                recent_failures = session.query(FailedSync, StudentContact.firstname, StudentContact.lastname)\
+                    .outerjoin(StudentContact, FailedSync.student_id == StudentContact.student_id)\
+                    .order_by(FailedSync.timestamp.desc())\
+                    .limit(200)\
+                    .all()
                 
                 seen_failed_ids = set()
                 failure_details = []
-                for f in recent_failures:
+                for f, fname, lname in recent_failures:
                     if f.student_id not in seen_failed_ids:
-                        failure_details.append(f"{f.student_id}: {f.error}")
+                        name_str = f"{fname} {lname}" if fname else "Unknown"
+                        failure_details.append({
+                            "id": f.student_id,
+                            "name": name_str,
+                            "error": f.error,
+                            "timestamp": f.timestamp.isoformat() if f.timestamp else None
+                        })
                         seen_failed_ids.add(f.student_id)
-                    if len(failure_details) >= 50:
+                    if len(failure_details) >= 20:
                         break
                 
-                # 5. Registration History (Last 30 Days)
-                # Using pure SQL for date truncation as it's cleaner/faster
+                # 5. Last Sync Timestamp
+                last_sync_ts = session.query(func.max(StudentContact.last_api_sync)).scalar()
+                
+                # 6. Registration History (Filtered Graph)
+                # Filter out bulk imports (> 1000 per day) to fix scaling
                 history_query = text("""
                     SELECT date(timezone('Z', created_at)) as day, count(*) 
                     FROM student_contacts 
                     WHERE created_at >= NOW() - INTERVAL '30 days'
                     GROUP BY day 
+                    HAVING count(*) < 1000 
                     ORDER BY day ASC;
                 """)
                 registration_history = []
                 try:
                     result = session.execute(history_query).fetchall()
-                    # Format as [{"date": "2024-01-01", "count": 5}, ...]
                     for row in result:
-                         # pg8000 might return date object or string depending on driver version
                          day_val = row[0]
-                         if isinstance(day_val, datetime): 
-                             day_str = day_val.strftime("%Y-%m-%d")
-                         else:
-                             day_str = str(day_val)
-                         
+                         day_str = day_val.strftime("%Y-%m-%d") if isinstance(day_val, datetime) else str(day_val)
                          registration_history.append({
                              "date": day_str,
                              "count": row[1]
                          })
                 except Exception as hist_e:
                     print(f"History query warning: {hist_e}")
-                    # Fallback if created_at is missing (should not happen after migration)
-                    pass
+
+                # 7. Daily Registration Metrics
+                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                yesterday_start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                yesterday_end = today_start
+                week_start = now - timedelta(days=7)
+                
+                # Calculate start of current week (Monday)
+                days_since_monday = now.weekday()
+                this_week_start = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                reg_today = session.query(StudentContact).filter(StudentContact.created_at >= today_start).count()
+                reg_yesterday = session.query(StudentContact).filter(
+                    StudentContact.created_at >= yesterday_start,
+                    StudentContact.created_at < yesterday_end
+                ).count()
+                reg_7days = session.query(StudentContact).filter(StudentContact.created_at >= week_start).count()
+                reg_week = session.query(StudentContact).filter(StudentContact.created_at >= this_week_start).count()
 
                 stats = {
                     "total_students_in_db": total_students,
                     "total_failed_syncs": unique_failures_count, 
-                    "students_synced_today": synced_today,
-                    "date": today_start.strftime("%Y-%m-%d"),
-                    "recent_failure_reasons": failure_details,
-                    "registration_history": registration_history
+                    "synced_count": synced_count,
+                    "synced_label": synced_label,
+                    "last_sync": last_sync_ts.isoformat() if last_sync_ts else "N/A",
+                    "date": now.strftime("%Y-%m-%d"),
+                    "recent_failures_data": failure_details,
+                    "registration_history": registration_history,
+                    "daily_registrations": {
+                        "today": reg_today,
+                        "yesterday": reg_yesterday,
+                        "last_7_days": reg_7days,
+                        "this_week": reg_week
+                    }
                 }
                 return {
                     'statusCode': 200, 
@@ -1410,6 +1462,7 @@ def lambda_handler(event, context):
                     'body': json.dumps(stats, default=str)
                 }
             except Exception as e:
+                print(f"Stats Error: {e}")
                 return {'statusCode': 500, 'body': f"Error: {str(e)}"}
             finally:
                 session.close()
@@ -1490,6 +1543,208 @@ def lambda_handler(event, context):
                     'body': json.dumps({"status": "started", "message": "Sync job triggered in background"})
                 }
             except Exception as e:
+                return {'statusCode': 500, 'body': json.dumps({"error": str(e)})}
+
+        # Admin Preview Student (Search before Sync)
+        if path == '/admin/preview-student':
+            print("🎯 DEBUG: Admin Preview Student")
+            try:
+                body = json.loads(event.get('body', '{}'))
+                admin_key = body.get('key')
+                student_id = body.get('student_id')
+                expected_key = os.getenv("ADMIN_SECRET", "admin123")
+                
+                if administrative_key := body.get('key'): 
+                    admin_key = administrative_key
+                
+                if admin_key != expected_key:
+                    return {'statusCode': 401, 'body': json.dumps({"error": "Unauthorized"})}
+                
+                if not student_id:
+                    return {'statusCode': 400, 'body': json.dumps({"error": "Missing student_id"})}
+                
+                from api.sms_client import SMSClient
+                request_id = str(uuid.uuid4())
+                sms_client = SMSClient(request_id=request_id)
+                
+                # Fetch profile from SMS API directly
+                profile_response = sms_client.get_student_profile(student_id)
+                
+                if profile_response and "data" in profile_response:
+                    data = profile_response["data"]
+                    student_data = {
+                        "student_id": data.get("student_id"),
+                        "name": f"{data.get('firstname', '')} {data.get('lastname', '')}".strip(),
+                        "phone": data.get("student_mobile") or data.get("guardian_mobile") or "N/A",
+                        "status": "Found in SMS System"
+                    }
+                    return {
+                        'statusCode': 200, 
+                        'headers': {'Content-Type': 'application/json'},
+                        'body': json.dumps({"found": True, "student": student_data})
+                    }
+                else:
+                    return {
+                        'statusCode': 404, 
+                        'headers': {'Content-Type': 'application/json'},
+                        'body': json.dumps({"found": False, "error": "Student ID not found in SMS"})
+                    }
+
+            except Exception as e:
+                print(f"Error in preview-student: {e}")
+                return {'statusCode': 500, 'body': json.dumps({"error": str(e)})}
+
+
+        # Admin Sync Single Student
+        if path == '/admin/sync-student':
+            print("🎯 DEBUG: Admin Sync Single Student")
+            try:
+                body = json.loads(event.get('body', '{}'))
+                admin_key = body.get('key')
+                student_id = body.get('student_id')
+                expected_key = os.getenv("ADMIN_SECRET", "admin123")
+                
+                if administrative_key := body.get('key'): # Handle key in body
+                    admin_key = administrative_key
+                
+                if admin_key != expected_key:
+                    return {'statusCode': 401, 'body': json.dumps({"error": "Unauthorized"})}
+                
+                if not student_id:
+                    return {'statusCode': 400, 'body': json.dumps({"error": "Missing student_id"})}
+                
+                # Dynamic imports to ensure fresh context
+                from utils.database import init_db
+                from api.sms_client import SMSClient
+                from services.gatepass_service import fetch_and_create_student_contact
+                
+                session = init_db()
+                request_id = str(uuid.uuid4())
+                sms_client = SMSClient(request_id=request_id)
+                extra_log = {"request_id": request_id, "admin_action": "sync_student", "student_id": student_id}
+                
+                try:
+                    contact, action, error_msg = fetch_and_create_student_contact(student_id, session, sms_client, extra_log)
+                    if contact:
+                        # Tailor message based on action
+                        if action == "created":
+                            msg = f"✅ <b>Synced!</b><br>Access enabled for <b>{contact.firstname} {contact.lastname}</b>.<br>Parent can use WhatsApp bot immediately."
+                        else:
+                            msg = f"🔄 <b>Updated!</b><br>Student <b>{contact.firstname} {contact.lastname}</b> was already synced.<br>Profile has been refreshed with latest data."
+
+                        return {
+                            'statusCode': 200, 
+                            'headers': {'Content-Type': 'application/json'},
+                            'body': json.dumps({
+                                "success": True,
+                                "message": msg,
+                                "student": {
+                                    "name": f"{contact.firstname} {contact.lastname}",
+                                    "phone": contact.preferred_phone_number,
+                                    "status": action
+                                }
+                            })
+                        }
+                    else:
+                        return {
+                            'statusCode': 400, 
+                            'headers': {'Content-Type': 'application/json'},
+                            'body': json.dumps({"error": error_msg or f"Student {student_id} sync failed"})
+                        }
+                except Exception as e:
+                    print(f"Error executing sync: {e}")
+                    session.rollback()
+                    raise e
+                finally:
+                    session.close()
+
+            except Exception as e:
+                print(f"Error in sync-student: {e}")
+                return {'statusCode': 500, 'body': json.dumps({"error": str(e)})}
+
+        # Admin Manual Gate Pass (for parents without WhatsApp)
+        if path == '/admin/manual-gatepass':
+            print("🎯 DEBUG: Admin Manual Gate Pass")
+            try:
+                body = json.loads(event.get('body', '{}'))
+                admin_key = body.get('key')
+                student_id = body.get('student_id')
+                term = body.get('term')
+                expected_key = os.getenv("ADMIN_SECRET", "admin123")
+                
+                if admin_key != expected_key:
+                    return {'statusCode': 401, 'body': json.dumps({"error": "Unauthorized"})}
+                
+                if not student_id:
+                    return {'statusCode': 400, 'body': json.dumps({"error": "Missing student_id"})}
+                
+                # Auto-detect current term if not provided
+                if not term:
+                    from datetime import date
+                    current_date = date.today()
+                    term = next(
+                        (t for t, start in config.TERM_START_DATES.items() 
+                         if start.date() <= current_date <= config.TERM_END_DATES[t].date()),
+                        "2025-3"  # Fallback
+                    )
+                
+                # Dynamic imports
+                from api.sms_client import SMSClient
+                from services.gatepass_service import generate_gatepass
+                
+                request_id = str(uuid.uuid4())
+                sms_client = SMSClient(request_id=request_id)
+                
+                # Fetch live financial data from SMS API
+                billed_fees = sms_client.get_student_billed_fees(student_id, term)
+                payments = sms_client.get_student_payments(student_id, term)
+                
+                total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
+                total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
+                
+                if total_fees <= 0:
+                    return {
+                        'statusCode': 400, 
+                        'headers': {'Content-Type': 'application/json'},
+                        'body': json.dumps({"error": f"No fees found for {student_id} in term {term}"})
+                    }
+                
+                # Generate gate pass (skip WhatsApp delivery)
+                result, status_code = generate_gatepass(
+                    student_id=student_id,
+                    term=term,
+                    payment_amount=total_paid,
+                    total_fees=total_fees,
+                    request_id=request_id,
+                    requesting_whatsapp_number=None,
+                    skip_whatsapp=True
+                )
+                
+                if status_code == 200 and "pdf_url" in result:
+                    return {
+                        'statusCode': 200, 
+                        'headers': {'Content-Type': 'application/json'},
+                        'body': json.dumps({
+                            "success": True,
+                            "pdf_url": result.get("pdf_url"),
+                            "pass_id": result.get("pass_id"),
+                            "expiry_date": result.get("expiry_date"),
+                            "student_name": result.get("student_name"),
+                            "payment_percentage": result.get("payment_percentage")
+                        })
+                    }
+                else:
+                    # Denied (e.g., payment below 50%)
+                    error_msg = result.get("reason") or result.get("error") or result.get("status") or "Gate pass denied"
+                    return {
+                        'statusCode': status_code, 
+                        'headers': {'Content-Type': 'application/json'},
+                        'body': json.dumps({"success": False, "error": error_msg})
+                    }
+                
+            except Exception as e:
+                print(f"Error in manual-gatepass: {e}")
+                traceback.print_exc()
                 return {'statusCode': 500, 'body': json.dumps({"error": str(e)})}
 
         # Admin Migrate Schema

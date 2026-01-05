@@ -140,7 +140,114 @@ def send_email_fallback(student_id, whatsapp_number, pass_id, expiry_date, s3_ke
     finally:
         session.remove()
 
-def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, requesting_whatsapp_number=None):
+def fetch_and_create_student_contact(student_id, session, sms_client, extra_log):
+    """
+    JIT (Just-In-Time) profile sync: Fetch student profile from SMS API and create local database record.
+    
+    This eliminates the 24-hour wait for new students by fetching their profile on-demand
+    when a gatepass is requested. The SMS system already has verified data immediately
+    after registration at the admin office.
+    
+    Args:
+        student_id: Student ID (e.g., SSC20257279)
+        session: Database session
+        sms_client: SMSClient instance
+        extra_log: Extra logging context
+        
+    Returns:
+        StudentContact object if successful, None otherwise
+    """
+    def sanitize_phone_number(phone):
+        """Sanitize and validate phone number format."""
+        if not phone or phone == "nan" or str(phone).strip() == "":
+            return None
+        # Remove spaces, dashes, brackets
+        cleaned = "".join(c for c in str(phone) if c.isdigit() or c == '+')
+        if not cleaned:
+            return None
+        # Ensure +263 format
+        if not cleaned.startswith("+"):
+            if cleaned.startswith("0"):
+                cleaned = "+263" + cleaned[1:]
+            elif len(cleaned) == 9:  # e.g. 771234567
+                cleaned = "+263" + cleaned
+        return cleaned if len(cleaned) >= 12 else None
+
+    try:
+        logger.info(f"[JIT Sync] Fetching profile from SMS API for {student_id}", extra=extra_log)
+        
+        # Fetch student profile from SMS API
+        profile_response = sms_client.get_student_profile(student_id)
+        
+        if not profile_response or "data" not in profile_response:
+            logger.error(f"[JIT Sync] No profile found in SMS API for {student_id}", extra=extra_log)
+            return None, None, "Profile not found in SMS system"
+        
+        profile_data = profile_response["data"]
+        
+        # Extract and validate data
+        firstname = profile_data.get("firstname", "")
+        lastname = profile_data.get("lastname", "")
+        raw_student_mobile = profile_data.get("student_mobile") or profile_data.get("student_mobile_number")
+        raw_guardian_mobile = profile_data.get("guardian_mobile_number")
+        
+        # Sanitize phone numbers
+        student_mobile = sanitize_phone_number(raw_student_mobile)
+        guardian_mobile = sanitize_phone_number(raw_guardian_mobile)
+        
+        # Fallback logic: Use guardian mobile if student mobile is missing
+        preferred_mobile = student_mobile if student_mobile else guardian_mobile
+
+        # Validate required fields (Must have at least one valid number)
+        if not preferred_mobile:
+            logger.error(f"[JIT Sync] No valid mobile number (student or guardian) for {student_id}", extra=extra_log)
+            return None, None, "No valid mobile number found (Student or Guardian)"
+        
+        # Check if student already exists (UPSERT logic)
+        contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+        
+        if contact:
+            # Update existing record
+            contact.firstname = firstname
+            contact.lastname = lastname
+            contact.student_mobile = student_mobile
+            contact.guardian_mobile_number = guardian_mobile
+            contact.preferred_phone_number = preferred_mobile
+            contact.last_updated = datetime.now(timezone.utc)
+            contact.last_api_sync = datetime.now(timezone.utc)
+            action = "updated"
+        else:
+            # Create new record
+            contact = StudentContact(
+                student_id=student_id,
+                firstname=firstname,
+                lastname=lastname,
+                student_mobile=student_mobile,
+                guardian_mobile_number=guardian_mobile,
+                preferred_phone_number=preferred_mobile,
+                last_updated=datetime.now(timezone.utc),
+                last_api_sync=datetime.now(timezone.utc),
+                created_at=datetime.now(timezone.utc)
+            )
+            session.add(contact)
+            action = "created"
+        
+        session.commit()
+        
+        logger.info(
+            f"[JIT Sync] Successfully {action} contact for {student_id}: "
+            f"{firstname} {lastname}, preferred: {preferred_mobile}",
+            extra=extra_log
+        )
+        
+        return contact, action, None
+        
+    except Exception as e:
+        logger.error(f"[JIT Sync] Failed to fetch/create contact for {student_id}: {str(e)}", extra=extra_log)
+        session.rollback()
+        return None, None, f"Database error: {str(e)}"
+
+def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, requesting_whatsapp_number=None, skip_whatsapp=False):
     session = init_db()
     extra_log = {"request_id": request_id, "student_id": student_id}
     try:
@@ -169,36 +276,53 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
 
         contact = session.query(StudentContact).filter_by(student_id=student_id).first()
         if not contact:
-            logger.error(f"No contact found for {student_id}", extra=extra_log)
-            return {"error": "No contact found for student ID"}, 404
+            # JIT Sync: Student not in local DB, fetch from SMS API
+            logger.info(f"Student {student_id} not in local DB, attempting JIT sync", extra=extra_log)
+        sms_client = SMSClient(request_id=request_id, use_cloud_api=True)
+        contact, _, _ = fetch_and_create_student_contact(student_id, session, sms_client, extra_log)
+        
+        if not contact:
+            logger.error(f"JIT sync failed for {student_id}", extra=extra_log)
+            return {
+                "error": "Student profile not found. Please ensure the student ID is correct or contact admin@shiningsmilescollege.ac.zw"
+            }, 404
+            
+            logger.info(f"JIT sync successful for {student_id}", extra=extra_log)
 
         # Use the requesting WhatsApp number if provided (the one the user is messaging from)
         # Otherwise fall back to database numbers
         whatsapp_number = requesting_whatsapp_number or contact.preferred_phone_number or contact.student_mobile
-        if not whatsapp_number:
-            logger.error(f"No valid WhatsApp number for {student_id}", extra=extra_log)
-            return {"error": "No valid WhatsApp number found for this student"}, 400
-
-        # Validate WhatsApp number format
-        if not re.match(r'^\+\d{10,15}$', whatsapp_number):
-            logger.error(f"Invalid WhatsApp number format: {whatsapp_number}", extra=extra_log)
-            return {"error": f"Invalid WhatsApp number format for {whatsapp_number} (expected + followed by 10-15 digits)"}, 400
-
-        # Check WhatsApp registration
-        sms_client = SMSClient(request_id=request_id, use_cloud_api=True)
-        if not sms_client.check_whatsapp_number(whatsapp_number):
-            logger.error(f"Number {whatsapp_number} not registered with WhatsApp", extra=extra_log)
-            return {"error": f"Number {whatsapp_number} is not registered with WhatsApp. Please register or contact support."}, 400
-
-        # Check rate limit
-        request_count, tier = check_and_update_rate_limit(session, student_id, extra_log)
         
-        if tier == 'block':
-            logger.warning(f"Rate limit exceeded for {student_id}: {request_count} requests this week", extra=extra_log)
-            return {
-                "status": "Rate limit exceeded",
-                "message": "You have reached the weekly limit for gate pass requests. Please use the pass sent previously or contact admin@shiningsmilescollege.ac.zw if you need assistance."
-            }, 429
+        # For admin-generated passes (skip_whatsapp=True), we don't need a valid WhatsApp number
+        if not skip_whatsapp:
+            if not whatsapp_number:
+                logger.error(f"No valid WhatsApp number for {student_id}", extra=extra_log)
+                return {"error": "No valid WhatsApp number found for this student"}, 400
+
+            # Validate WhatsApp number format
+            if not re.match(r'^\+\d{10,15}$', whatsapp_number):
+                logger.error(f"Invalid WhatsApp number format: {whatsapp_number}", extra=extra_log)
+                return {"error": f"Invalid WhatsApp number format for {whatsapp_number} (expected + followed by 10-15 digits)"}, 400
+
+            # Check WhatsApp registration
+            sms_client = SMSClient(request_id=request_id, use_cloud_api=True)
+            if not sms_client.check_whatsapp_number(whatsapp_number):
+                logger.error(f"Number {whatsapp_number} not registered with WhatsApp", extra=extra_log)
+                return {"error": f"Number {whatsapp_number} is not registered with WhatsApp. Please register or contact support."}, 400
+
+            # Check rate limit (only for WhatsApp requests, not admin-generated)
+            request_count, tier = check_and_update_rate_limit(session, student_id, extra_log)
+            
+            if tier == 'block':
+                logger.warning(f"Rate limit exceeded for {student_id}: {request_count} requests this week", extra=extra_log)
+                return {
+                    "status": "Rate limit exceeded",
+                    "message": "You have reached the weekly limit for gate pass requests. Please use the pass sent previously or contact admin@shiningsmilescollege.ac.zw if you need assistance."
+                }, 429
+        else:
+            # For admin-generated passes, use a placeholder number if none exists
+            if not whatsapp_number:
+                whatsapp_number = "ADMIN_GENERATED"
 
         payment_percentage = (payment_amount / total_fees) * 100
         expiry_date = calculate_expiry_date(term, payment_percentage)
@@ -454,6 +578,19 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
             ExpiresIn=expiry_seconds
         )
 
+        # Skip WhatsApp sending for admin-generated passes
+        if skip_whatsapp:
+            logger.info(f"Admin-generated gate pass for {student_id}, skipping WhatsApp delivery", extra=extra_log)
+            return {
+                "status": "Gate pass generated (admin)",
+                "pass_id": pass_id,
+                "expiry_date": expiry_date.isoformat(),
+                "pdf_url": presigned_url,
+                "student_name": f"{contact.firstname or ''} {contact.lastname or ''}".strip(),
+                "payment_percentage": round(payment_percentage, 1)
+            }, 200
+
+        # Send via WhatsApp
         try:
             check = requests.get(presigned_url, stream=True, timeout=5)
             if check.status_code != 200:
@@ -489,6 +626,7 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
                 "status": "Gate pass issued (text fallback)",
                 "pass_id": pass_id,
                 "expiry_date": expiry_date.isoformat(),
+                "pdf_url": presigned_url,
                 "whatsapp_number": whatsapp_number
             }, 200
 
@@ -496,6 +634,7 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
             "status": "Gate pass issued",
             "pass_id": pass_id,
             "expiry_date": expiry_date.isoformat(),
+            "pdf_url": presigned_url,
             "whatsapp_number": whatsapp_number
         }, 200
 
