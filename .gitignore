@@ -60,5 +60,9 @@ quick_migration*.py
 nat_user_data*.sh
 .current-layer-*
 
+# Documentation/Generated
+presentation_bot_summary.md
+presentation_bot_summary.pdf
+
 # Keep important config files (remove from ignore if needed)
 # !samconfig.toml  # Uncomment to track SAM configdocker-package/

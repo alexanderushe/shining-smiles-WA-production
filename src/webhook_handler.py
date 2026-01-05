@@ -242,10 +242,81 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                 return add_menu_if_needed(f"Hello, {fullname}.\nWhat can I help you with today?", show_menu=True)
 
             elif message_body in ["1", "balance", "view balance"]:
-                user_state.state = "awaiting_term_balance"
-                user_state.last_updated = current_time
-                session.commit()
-                return f"📊 *Hi {fullname},*\nPlease reply with a valid term (e.g., *2025-1*, *2025-2*, *2025-3*) for all students."
+                # Auto-detect current term
+                term = config.get_current_term()
+                
+                if not term:
+                    # School is on break
+                    next_term = config.get_next_term()
+                    term = config.get_most_recent_completed_term()
+                    
+                    if next_term and config.TERM_START_DATES.get(next_term):
+                        next_term_date = config.TERM_START_DATES[next_term].strftime("%B %d, %Y")
+                        break_message = (
+                            f"🏫 *School is currently on break!*\n"
+                            f"Term {next_term} begins on *{next_term_date}*.\n\n"
+                        )
+                    else:
+                        break_message = "🏫 *School is currently on break!*\n\n"
+                    
+                    if not term:
+                        return f"{break_message}No previous term data available. Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                    
+                    prefix_message = f"{break_message}*Your last term balance (Term {term}):*\n"
+                else:
+                    prefix_message = f"📊 *Current Balance (Term {term}):*\n"
+                
+                # Fetch balance for all students
+                try:
+                    balance_texts = []
+                    for student_id in student_ids:
+                        billed_fees = sms_client.get_student_billed_fees(student_id, term)
+                        payments = sms_client.get_student_payments(student_id, term)
+
+                        total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
+                        total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
+                        balance = total_fees - total_paid
+
+                        student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                        if not billed_fees.get("data", {}).get("bills"):
+                            balance_texts.append(f"*{student_id} ({student_name})*: No fees recorded")
+                        elif balance == 0.0 and total_fees > 0.0:
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*: Fully paid ✅\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}"
+                            )
+                        else:
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*:\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}\n"
+                                f"  Balance Owed: ${balance:.2f}"
+                            )
+
+                    if not balance_texts:
+                        response_text = (
+                            f"📊 *Hi {fullname},*\n{prefix_message}"
+                            f"No fees recorded for any students in term *{term}*. Please contact _admin@shiningsmilescollege.ac.zw_.\n\n"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                        )
+                    else:
+                        response_text = (
+                            f"📊 *Hi {fullname},*\n{prefix_message}\n" +
+                            "\n\n".join(balance_texts) + 
+                            f"\n\n💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                        )
+                    
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    return response_text
+                except Exception as e:
+                    logger.error(f"Error fetching balance: {str(e)}", extra=extra_log)
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    return f"⚠️ *Hi {fullname},*\n*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
 
             elif message_body in ["2", "statement", "request statement"]:
                 try:
@@ -324,15 +395,17 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                         statement_texts.append(statement_text)
 
                     if not statement_texts:
-                        user_state.state = "main_menu"
+                        user_state.state = "awaiting_term_statement"
                         user_state.last_updated = current_time
                         session.commit()
-                        return f"📊 *Hi {fullname},*\nNo account statements found for any students in term *{default_term}*. Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                        return f"📊 *Hi {fullname},*\nNo account statements found for any students in term *{default_term}*.\n\n💡 View other terms? Reply with term code (e.g., *2025-1*, *2025-3*)\nOr reply *menu* for main options."
                     else:
                         combined_text = f"Account statement for term {default_term}:\n\n" + "\n\n".join(statement_texts)
                         if len(combined_text) > max_message_length:
-                            combined_text = combined_text[:max_message_length] + "\n\n_Reply 'menu' for more options._"
-                        user_state.state = "main_menu"
+                            combined_text = combined_text[:max_message_length] + "\n\n💡 View other terms? Reply with term code (e.g., *2025-1*, *2025-3*)\n_Reply 'menu' for more options._"
+                        else:
+                            combined_text += "\n\n💡 View other terms? Reply with term code (e.g., *2025-1*, *2025-3*)\n_Reply 'menu' for more options._"
+                        user_state.state = "awaiting_term_statement"
                         user_state.last_updated = current_time
                         session.commit()
                         return combined_text
@@ -408,6 +481,18 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                         logger.debug(f"[GatePass] {student_id} - Paid: {total_paid}, Total Fees: {total_fees}, Term: {default_term}", extra=extra_log)
 
+                        student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                        
+                        # PRE-FLIGHT CHECK: Don't issue gate pass if fees not posted
+                        if total_fees <= 0:
+                            gatepass_texts.append(
+                                f"*Gate Pass for {student_id} ({student_name})*:\n"
+                                f"⏳ *Fees Not Yet Posted*\n"
+                                f"Term *{default_term}* fees are being processed.\n"
+                                f"Please check back in 1-2 days or contact _admin@shiningsmilescollege.ac.zw_."
+                            )
+                            continue  # Skip gate pass generation for this student
+
                         # Call the gatepass service directly instead of HTTP request
                         try:
                             result, status_code = generate_gatepass(
@@ -465,7 +550,20 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                         session.commit()
                         return f"⚠️ *Hi {fullname},*\n*No gate passes issued.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
                     else:
-                        response_text = "Gate pass issued!\n\n" + "\n\n".join(gatepass_texts) + f"\n\n_If not received, ensure {whatsapp_number} is registered with WhatsApp._\n\n_Reply 'menu' for more options._"
+                        # Check if any actual gate passes were issued (vs just "fees not posted" messages)
+                        has_actual_pass = any("Gate Pass Issued" in text or "already have a valid" in text for text in gatepass_texts)
+                        
+                        if has_actual_pass:
+                            header = "✅ *Gate pass issued!*\n\n"
+                        else:
+                            header = "📋 *Gate Pass Status:*\n\n"
+                        
+                        response_text = (
+                            f"*Hi {fullname},*\n"
+                            f"{header}" +
+                            "\n\n".join(gatepass_texts) + 
+                            f"\n\nIf not received, ensure {whatsapp_number} is registered with WhatsApp.\n\n_Reply 'menu' for more options._"
+                        )
                         user_state.state = "main_menu"
                         user_state.last_updated = current_time
                         session.commit()
@@ -502,11 +600,233 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                 session.commit()
                 return f"❓ *Hi {fullname},*\n*Help*: Reply with *menu* to see options or contact _admin@shiningsmilescollege.ac.zw_ for account issues.\n{menu_text}"
 
+            elif message_body in config.TERM_START_DATES.keys():
+                # User entered a term code directly - show balance and offer statements
+                term = message_body
+                try:
+                    term_start = config.TERM_START_DATES.get(term)
+                    if term_start and term_start.date() > current_date:
+                        user_state.state = "main_menu"
+                        user_state.last_updated = current_time
+                        session.commit()
+                        return f"📅 *Hi {fullname},*\nTerm *{term}* has not started yet. Please select a current or past term (e.g., *2025-1*, *2025-2*).\n{menu_text}"
+
+                    balance_texts = []
+                    for student_id in student_ids:
+                        billed_fees = sms_client.get_student_billed_fees(student_id, term)
+                        payments = sms_client.get_student_payments(student_id, term)
+
+                        total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
+                        total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
+                        balance = total_fees - total_paid
+
+                        student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                        if not billed_fees.get("data", {}).get("bills"):
+                            balance_texts.append(f"*{student_id} ({student_name})*: No fees recorded")
+                        elif balance == 0.0 and total_fees > 0.0:
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*: Fully paid ✅\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}"
+                            )
+                        else:
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*:\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}\n"
+                                f"  Balance Owed: ${balance:.2f}"
+                            )
+
+                    if not balance_texts:
+                        response_text = (
+                            f"📊 *Hi {fullname},*\n"
+                            f"No fees recorded for any students in term *{term}*. Please contact _admin@shiningsmilescollege.ac.zw_.\n\n"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                        )
+                    else:
+                        response_text = (
+                            f"📊 *Hi {fullname},*\n"
+                            f"📊 *Balance for Term {term}:*\n\n" +
+                            "\n\n".join(balance_texts) + 
+                            f"\n\n💬 *Want detailed statements?* Reply *statement {term}*\n"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                        )
+                    
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    return response_text
+
+                except Exception as e:
+                    logger.error(f"Error in term code handling: {str(e)}", extra=extra_log)
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    return f"⚠️ *Hi {fullname},*\n*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+
+            elif message_body.startswith("statement ") and len(message_body.split()) == 2:
+                # User typed "statement 2025-1" to get statement for specific term
+                _, term = message_body.split()
+                if term in config.TERM_START_DATES.keys():
+                    try:
+                        term_start = config.TERM_START_DATES.get(term)
+                        if term_start and term_start.date() > current_date:
+                            user_state.state = "main_menu"
+                            user_state.last_updated = current_time
+                            session.commit()
+                            return f"📅 *Hi {fullname},*\nTerm *{term}* has not started yet. Please select a current or past term.\n{menu_text}"
+
+                        statement_texts = []
+                        max_message_length = 4000
+                        for student_id in student_ids:
+                            account = sms_client.get_student_account_statement(student_id, term)
+                            billed_fees = sms_client.get_student_billed_fees(student_id, term)
+                            payments = sms_client.get_student_payments(student_id, term)
+
+                            total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
+                            total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
+                            balance = total_fees - total_paid
+
+                            student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                            if not billed_fees.get("data", {}).get("bills"):
+                                statement_text = f"*No fees recorded for {student_id} ({student_name}) in term {term}.*"
+                            else:
+                                payment_details = (
+                                    "\n".join(
+                                        [f"- *${p['amount']:.2f}* on _{p.get('date', 'N/A')}_ ({p.get('fee_type', 'N/A')})" for p in payments.get("data", {}).get("payments", [])]
+                                    )
+                                    if payments.get("data", {}).get("payments")
+                                    else "No payments recorded."
+                                )
+                                fee_details = (
+                                    "\n".join(
+                                        [f"- *${b['amount']:.2f}* on _{b.get('date', 'N/A')}_ ({b.get('fee_type', 'N/A')})" for b in billed_fees.get("data", {}).get("bills", [])]
+                                    )
+                                    if billed_fees.get("data", {}).get("bills")
+                                    else "No fees recorded."
+                                )
+                                statement_text = (
+                                    f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
+                                    f"*Total Fees*: ${total_fees:.2f}\n"
+                                    f"*Total Paid*: ${total_paid:.2f}\n"
+                                    f"*Balance Owed*: ${balance:.2f}\n"
+                                    f"*Fees Charged*:\n{fee_details}\n"
+                                    f"*Payments*:\n{payment_details}"
+                                ) if balance != 0.0 or total_fees <= 0.0 else (
+                                    f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
+                                    f"*Great news!* Balance is *fully paid*.\n"
+                                    f"*Total Fees*: ${total_fees:.2f}\n"
+                                    f"*Total Paid*: ${total_paid:.2f}\n"
+                                    f"*Balance Owed*: ${balance:.2f}\n"
+                                    f"*Fees Charged*:\n{fee_details}\n"
+                                    f"*Payments*:\n{payment_details}"
+                                )
+
+                                if len(statement_text) > max_message_length:
+                                    statement_text = statement_text[:max_message_length - 50] + "\n*Note*: Statement truncated due to length. Contact admin for full details."
+                            statement_texts.append(statement_text)
+
+                        if not statement_texts:
+                            user_state.state = "main_menu"
+                            user_state.last_updated = current_time
+                            session.commit()
+                            return f"📊 *Hi {fullname},*\nNo account statements found for any students in term *{term}*. Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                        else:
+                            combined_text = f"Account statement for term {term}:\n\n" + "\n\n".join(statement_texts)
+                            if len(combined_text) > max_message_length:
+                                combined_text = combined_text[:max_message_length] + "\n\n_Reply 'menu' for more options._"
+                            user_state.state = "main_menu"
+                            user_state.last_updated = current_time
+                            session.commit()
+                            return combined_text
+
+                    except Exception as e:
+                        logger.error(f"Error in statement generation: {str(e)}", extra=extra_log)
+                        user_state.state = "main_menu"
+                        user_state.last_updated = current_time
+                        session.commit()
+                        return f"⚠️ *Hi {fullname},*\n*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+
             else:
                 return add_menu_if_needed(f"Invalid input. Please try again.", show_menu=True)
 
         elif user_state.state in ["awaiting_term_balance", "awaiting_term_statement", "awaiting_term_gatepass"]:
-            if message_body in config.TERM_START_DATES.keys():
+            # Allow users to return to main menu or trigger other actions
+            if message_body == "menu":
+                user_state.state = "main_menu"
+                user_state.last_updated = current_time
+                session.commit()
+                return add_menu_if_needed(f"Hello, {fullname}.\nWhat can I help you with today?", show_menu=True)
+            
+            elif message_body in ["1", "balance", "view balance"]:
+                # User wants to view balance - redirect to balance handler
+                user_state.state = "main_menu"
+                user_state.last_updated = current_time
+                session.commit()
+                # Trigger balance view for current term
+                term = config.get_current_term() or config.get_most_recent_completed_term() or "2026-1"
+                
+                try:
+                    balance_texts = []
+                    for student_id in student_ids:
+                        billed_fees = sms_client.get_student_billed_fees(student_id, term)
+                        payments = sms_client.get_student_payments(student_id, term)
+
+                        total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
+                        total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
+                        balance = total_fees - total_paid
+
+                        student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                        if not billed_fees.get("data", {}).get("bills"):
+                            balance_texts.append(f"*{student_id} ({student_name})*: No fees recorded")
+                        elif balance == 0.0 and total_fees > 0.0:
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*: Fully paid ✅\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}"
+                            )
+                        else:
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*:\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}\n"
+                                f"  Balance Owed: ${balance:.2f}"
+                            )
+
+                    if not balance_texts:
+                        response_text = (
+                            f"📊 *Hi {fullname},*\n"
+                            f"No fees recorded for any students in term *{term}*.\n\n"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                        )
+                    else:
+                        response_text = (
+                            f"📊 *Hi {fullname},*\n"
+                            f"📊 *Balance for Term {term}:*\n\n" +
+                            "\n\n".join(balance_texts) + 
+                            f"\n\n💬 *Want detailed statements?* Reply *statement {term}*\n"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                        )
+                    return response_text
+                except Exception as e:
+                    logger.error(f"Error fetching balance: {str(e)}", extra=extra_log)
+                    return f"⚠️ *Hi {fullname},*\n*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+            
+            elif message_body in ["2", "statement", "request statement"]:
+                # User wants statements - set state to awaiting_term_statement
+                user_state.state = "awaiting_term_statement"
+                user_state.last_updated = current_time
+                session.commit()
+                return f"📊 *Hi {fullname},*\nPlease reply with a valid term (e.g., *2025-1*, *2025-2*, *2025-3*) for all students."
+            
+            elif message_body in ["3", "gate pass", "get gate pass"]:
+                # User wants gate pass - redirect to main menu and let it handle
+                user_state.state = "main_menu"
+                user_state.last_updated = current_time
+                session.commit()
+                return f"📅 *Hi {fullname},*\nGate pass requests require the current term. Please select option 3 from the main menu.\n{menu_text}"
+            
+            elif message_body in config.TERM_START_DATES.keys():
                 term = message_body
                 try:
                     term_start = config.TERM_START_DATES.get(term)
@@ -555,8 +875,74 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                         user_state.last_updated = current_time
                         session.commit()
                         return response_text
-                    # Similar handling for other states (statement, gatepass) can be added here
-                    # For now, fallback to balance logic or extend as needed
+                    
+                    elif user_state.state == "awaiting_term_statement":
+                        # Generate statements for the requested term
+                        statement_texts = []
+                        max_message_length = 4000
+                        for student_id in student_ids:
+                            account = sms_client.get_student_account_statement(student_id, term)
+                            billed_fees = sms_client.get_student_billed_fees(student_id, term)
+                            payments = sms_client.get_student_payments(student_id, term)
+
+                            total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
+                            total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
+                            balance = total_fees - total_paid
+
+                            student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                            if not billed_fees.get("data", {}).get("bills"):
+                                statement_text = f"*No fees recorded for {student_id} ({student_name}) in term {term}.*"
+                            else:
+                                payment_details = (
+                                    "\n".join(
+                                        [f"- *${p['amount']:.2f}* on _{p.get('date', 'N/A')}_ ({p.get('fee_type', 'N/A')})" for p in payments.get("data", {}).get("payments", [])]
+                                    )
+                                    if payments.get("data", {}).get("payments")
+                                    else "No payments recorded."
+                                )
+                                fee_details = (
+                                    "\n".join(
+                                        [f"- *${b['amount']:.2f}* on _{b.get('date', 'N/A')}_ ({b.get('fee_type', 'N/A')})" for b in billed_fees.get("data", {}).get("bills", [])]
+                                    )
+                                    if billed_fees.get("data", {}).get("bills")
+                                    else "No fees recorded."
+                                )
+                                statement_text = (
+                                    f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
+                                    f"*Total Fees*: ${total_fees:.2f}\n"
+                                    f"*Total Paid*: ${total_paid:.2f}\n"
+                                    f"*Balance Owed*: ${balance:.2f}\n"
+                                    f"*Fees Charged*:\n{fee_details}\n"
+                                    f"*Payments*:\n{payment_details}"
+                                ) if balance != 0.0 or total_fees <= 0.0 else (
+                                    f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
+                                    f"*Great news!* Balance is *fully paid*.\n"
+                                    f"*Total Fees*: ${total_fees:.2f}\n"
+                                    f"*Total Paid*: ${total_paid:.2f}\n"
+                                    f"*Balance Owed*: ${balance:.2f}\n"
+                                    f"*Fees Charged*:\n{fee_details}\n"
+                                    f"*Payments*:\n{payment_details}"
+                                )
+
+                                if len(statement_text) > max_message_length:
+                                    statement_text = statement_text[:max_message_length - 50] + "\n*Note*: Statement truncated due to length. Contact admin for full details."
+                            statement_texts.append(statement_text)
+
+                        if not statement_texts:
+                            user_state.state = "awaiting_term_statement"
+                            user_state.last_updated = current_time
+                            session.commit()
+                            return f"📊 *Hi {fullname},*\nNo account statements found for any students in term *{term}*.\n\n💡 View other terms? Reply with term code (e.g., *2025-1*, *2025-3*)\nOr reply *menu* for main options."
+                        else:
+                            combined_text = f"Account statement for term {term}:\n\n" + "\n\n".join(statement_texts)
+                            if len(combined_text) > max_message_length:
+                                combined_text = combined_text[:max_message_length] + "\n\n💡 View other terms? Reply with term code (e.g., *2025-1*, *2025-3*)\n_Reply 'menu' for more options._"
+                            else:
+                                combined_text += "\n\n💡 View other terms? Reply with term code (e.g., *2025-1*, *2025-3*)\n_Reply 'menu' for more options._"
+                            user_state.state = "awaiting_term_statement"
+                            user_state.last_updated = current_time
+                            session.commit()
+                            return combined_text
 
                 except Exception as e:
                     logger.error(f"Error in term-specific handling for {term}: {str(e)}", extra=extra_log)
@@ -565,7 +951,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                     session.commit()
                     return f"⚠️ *Hi {fullname},*\nError fetching for term *{term}*. Please try again.\n{menu_text}"
             else:
-                return f"📅 *Hi {fullname},*\n*Invalid term.* Please reply with a valid term (e.g., *2025-1*, *2025-2*, *2025-3*)."
+                return f"📅 *Hi {fullname},*\n*Invalid term.* Please reply with a valid term (e.g., *2026-1*, *2026-2*, *2026-3*, *2025-3*)."
 
         else:
             user_state.state = "main_menu"

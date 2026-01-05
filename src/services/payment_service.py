@@ -3,19 +3,13 @@ from api.sms_client import SMSClient
 from utils.whatsapp import send_whatsapp_message
 from utils.logger import setup_logger
 from utils.database import init_db, StudentContact, FailedSync
+from config import Config
 import datetime
 from flask import current_app
 from ratelimit import RateLimitException
 import time
 
 logger = setup_logger(__name__)
-
-# Term end dates for 2025
-TERM_END_DATES = {
-    "2025-1": datetime.datetime(2025, 3, 31, tzinfo=datetime.timezone.utc),
-    "2025-2": datetime.datetime(2025, 7, 31, tzinfo=datetime.timezone.utc),
-    "2025-3": datetime.datetime(2025, 11, 30, tzinfo=datetime.timezone.utc)
-}
 
 def check_new_payments(student_id, term, phone_number=None, session=None, test_mode=False, test_payment_percentage=50):
     """Check for new payments, send confirmation, and generate gate pass if applicable."""
@@ -29,10 +23,10 @@ def check_new_payments(student_id, term, phone_number=None, session=None, test_m
         logger.debug(f"Processing payment check for {student_id} (test_mode={test_mode})")
 
         # Validate term
-        if term not in TERM_END_DATES:
+        if term not in Config.TERM_END_DATES:
             logger.error(f"Invalid term: {term}")
             return {"error": f"Invalid term: {term}"}, 400
-        if datetime.datetime.now(datetime.timezone.utc) > TERM_END_DATES[term]:
+        if datetime.datetime.now(datetime.timezone.utc) > Config.TERM_END_DATES[term]:
             logger.error(f"Term {term} has ended")
             return {"error": f"Term {term} has ended"}, 400
 

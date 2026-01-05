@@ -357,15 +357,119 @@ def whatsapp_menu():
                 return Response(str(response), mimetype="application/xml")
 
             elif message_body in ["1", "balance", "view balance"]:
-                response_message = response.message(
-                    f"📊 *Hi {fullname},*\nPlease reply with a valid term (e.g., *2025-1*, *2025-2*, *2025-3*) for all students."
-                )
-                user_state.state = "awaiting_term_balance"
-                user_state.last_updated = current_time
-                session.commit()
-                logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
-                session.close()
-                return Response(str(response), mimetype="application/xml")
+                # Auto-detect current term
+                term = config.get_current_term()
+                
+                if not term:
+                    # School is on break
+                    next_term = config.get_next_term()
+                    term = config.get_most_recent_completed_term()
+                    
+                    if next_term and config.TERM_START_DATES.get(next_term):
+                        next_term_date = config.TERM_START_DATES[next_term].strftime("%B %d, %Y")
+                        break_message = (
+                            f"🏫 *School is currently on break!*\n"
+                            f"Term {next_term} begins on *{next_term_date}*.\n\n"
+                        )
+                    else:
+                        break_message = "🏫 *School is currently on break!*\n\n"
+                    
+                    if not term:
+                        response_message = response.message( f"{break_message}"
+                            f"No previous term data available. Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                        )
+                        logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                        session.close()
+                        return Response(str(response), mimetype="application/xml")
+                    
+                    prefix_message = f"{break_message}*Your last term balance (Term {term}):*\n"
+                else:
+                    prefix_message = f"📊 *Current Balance (Term {term}):*\n"
+                
+                # Fetch balance for all students
+                try:
+                    balance_texts = []
+                    for student_id in student_ids:
+                        start_time = datetime.now(timezone.utc)
+                        billed_fees = sms_client.get_student_billed_fees(student_id, term)
+                        payments = sms_client.get_student_payments(student_id, term)
+                        elapsed_time = (datetime.now(timezone.utc) - start_time).total_seconds()
+                        if elapsed_time > 25:
+                            logger.warning(f"API calls for balance took {elapsed_time}s, risking timeout for {student_id}", extra=extra_log)
+
+                        logger.debug(f"Balance for {student_id}, Term {term}: "
+                                     f"Billed fees: {billed_fees}, "
+                                     f"Payments: {payments}", extra=extra_log)
+
+                        total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
+                        total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
+                        balance = total_fees - total_paid
+
+                        student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                        if not billed_fees.get("data", {}).get("bills"):
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*: No fees recorded"
+                            )
+                        elif balance == 0.0 and total_fees > 0.0:
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*: Fully paid ✅\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}"
+                            )
+                        else:
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*:\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}\n"
+                                f"  Balance Owed: ${balance:.2f}"
+                            )
+
+                    if not balance_texts:
+                        response_text = (
+                            f"📊 *Hi {fullname},*\n"
+                            f"{prefix_message}"
+                            f"No fees recorded for any students in term *{term}*. Please contact _admin@shiningsmilescollege.ac.zw_.\n\n"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                        )
+                    else:
+                        response_text = (
+                            f"📊 *Hi {fullname},*\n"
+                            f"{prefix_message}\n"
+                            f"\n\n".join(balance_texts) + 
+                            f"\n\n💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                        )
+                    
+                    response_message = response.message(response_text)
+                    logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    session.close()
+                    return Response(str(response), mimetype="application/xml")
+
+                except RateLimitException:
+                    logger.warning(f"Rate limit hit while fetching balance for {student_ids}, term {term}", extra=extra_log)
+                    response_message = response.message(
+                        f"⚠️ *Hi {fullname},*\n*Too many requests.* Please try again shortly.\n{menu_text}"
+                    )
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                    session.close()
+                    return Response(str(response), mimetype="application/xml")
+                except Exception as e:
+                    logger.error(f"Unexpected error in balance retrieval for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
+                    response_message = response.message(
+                        f"⚠️ *Hi {fullname},*\n"
+                        f"*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                    )
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                    session.close()
+                    return Response(str(response), mimetype="application/xml")
 
             elif message_body in ["2", "statement", "request statement"]:
                 try:
@@ -624,6 +728,18 @@ def whatsapp_menu():
 
                         logger.debug(f"[GatePass] {student_id} - Paid: {total_paid}, Total Fees: {total_fees}, Term: {default_term}, Percentage: {payment_percentage}%", extra=extra_log)
 
+                        student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                        
+                        # PRE-FLIGHT CHECK: Don't issue gate pass if fees not posted
+                        if total_fees <= 0:
+                            gatepass_texts.append(
+                                f"*Gate Pass for {student_id} ({student_name})*:\n"
+                                f"⏳ *Fees Not Yet Posted*\n"
+                                f"Term *{default_term}* fees are being processed.\n"
+                                f"Please check back in 1-2 days or contact _admin@shiningsmilescollege.ac.zw_."
+                            )
+                            continue  # Skip gate pass generation for this student
+
                         gatepass_url = f"{config.APP_BASE_URL}/generate-gatepass"
                         payload = {
                             "student_id": student_id,
@@ -669,10 +785,19 @@ def whatsapp_menu():
                             f"⚠️ *Hi {fullname},*\n*No gate passes issued.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
                         )
                     else:
+                        # Check if any actual gate passes were issued (vs just "fees not posted" messages)
+                        has_actual_pass = any("Gate Pass Issued" in text or "already have a valid" in text for text in gatepass_texts)
+                        
+                        if has_actual_pass:
+                            header = "✅ *Gate pass issued!*\n\n"
+                        else:
+                            header = "📋 *Gate Pass Status:*\n\n"
+                        
                         response_text = (
-                            f"✅ *Hi {fullname},*\n"
+                            f"*Hi {fullname},*\n"
+                            f"{header}"
                             f"\n\n".join(gatepass_texts) +
-                            f"\nIf not received, ensure *{whatsapp_number}* is registered with WhatsApp or contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                            f"\n\nIf not received, ensure *{whatsapp_number}* is registered with WhatsApp or contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
                         )
                         response_message = response.message(response_text)
 
@@ -742,6 +867,263 @@ def whatsapp_menu():
                 session.commit()
                 session.close()
                 return Response(str(response), mimetype="application/xml")
+
+            elif message_body in config.TERM_START_DATES.keys():
+                # User entered a term code directly - show balance and offer statements
+                term = message_body
+                try:
+                    current_date = current_time.date()
+                    term_start = config.TERM_START_DATES.get(term)
+                    if term_start and term_start.date() > current_date:
+                        response_message = response.message(
+                            f"📅 *Hi {fullname},*\n"
+                            f"Term *{term}* has not started yet. Please select a current or past term (e.g., *2025-1*, *2025-2*).\n{menu_text}"
+                        )
+                        logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                        session.close()
+                        return Response(str(response), mimetype="application/xml")
+
+                    balance_texts = []
+                    for student_id in student_ids:
+                        start_time = datetime.now(timezone.utc)
+                        billed_fees = sms_client.get_student_billed_fees(student_id, term)
+                        payments = sms_client.get_student_payments(student_id, term)
+                        elapsed_time = (datetime.now(timezone.utc) - start_time).total_seconds()
+                        if elapsed_time > 25:
+                            logger.warning(f"API calls for balance took {elapsed_time}s, risking timeout for {student_id}", extra=extra_log)
+
+                        logger.debug(f"Balance for {student_id}, Term {term}: "
+                                     f"Billed fees: {billed_fees}, "
+                                     f"Payments: {payments}", extra=extra_log)
+
+                        total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
+                        total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
+                        balance = total_fees - total_paid
+
+                        student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                        if not billed_fees.get("data", {}).get("bills"):
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*: No fees recorded"
+                            )
+                        elif balance == 0.0 and total_fees > 0.0:
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*: Fully paid ✅\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}"
+                            )
+                        else:
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*:\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}\n"
+                                f"  Balance Owed: ${balance:.2f}"
+                            )
+
+                    if not balance_texts:
+                        response_text = (
+                            f"📊 *Hi {fullname},*\n"
+                            f"No fees recorded for any students in term *{term}*. Please contact _admin@shiningsmilescollege.ac.zw_.\n\n"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                        )
+                    else:
+                        response_text = (
+                            f"📊 *Hi {fullname},*\n"
+                            f"📊 *Balance for Term {term}:*\n\n"
+                            f"\n\n".join(balance_texts) + 
+                            f"\n\n💬 *Want detailed statements?* Reply *statement {term}*\n"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                        )
+                    
+                    response_message = response.message(response_text)
+                    logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    session.close()
+                    return Response(str(response), mimetype="application/xml")
+
+                except RateLimitException:
+                    logger.warning(f"Rate limit hit while fetching balance for {student_ids}, term {term}", extra=extra_log)
+                    response_message = response.message(
+                        f"⚠️ *Hi {fullname},*\n*Too many requests.* Please try again shortly.\n{menu_text}"
+                    )
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                    session.close()
+                    return Response(str(response), mimetype="application/xml")
+                except Exception as e:
+                    logger.error(f"Unexpected error in balance retrieval for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
+                    response_message = response.message(
+                        f"⚠️ *Hi {fullname},*\n"
+                        f"*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                    )
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                    session.close()
+                    return Response(str(response), mimetype="application/xml")
+
+            elif message_body.startswith("statement ") and len(message_body.split()) == 2:
+                # User typed "statement 2025-1" to get statement for specific term
+                _, term = message_body.split()
+                if term in config.TERM_START_DATES.keys():
+                    try:
+                        current_date = current_time.date()
+                        term_start = config.TERM_START_DATES.get(term)
+                        if term_start and term_start.date() > current_date:
+                            response_message = response.message(
+                                f"📅 *Hi {fullname},*\n"
+                                f"Term *{term}* has not started yet. Please select a current or past term (e.g., *2025-1*, *2025-2*).\n{menu_text}"
+                            )
+                            logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                            user_state.state = "main_menu"
+                            user_state.last_updated = current_time
+                            session.commit()
+                            session.close()
+                            return Response(str(response), mimetype="application/xml")
+
+                        statement_texts = []
+                        max_message_length = 1400
+                        for student_id in student_ids:
+                            start_time = datetime.now(timezone.utc)
+                            account = sms_client.get_student_account_statement(student_id, term)
+                            billed_fees = sms_client.get_student_billed_fees(student_id, term)
+                            payments = sms_client.get_student_payments(student_id, term)
+                            elapsed_time = (datetime.now(timezone.utc) - start_time).total_seconds()
+                            if elapsed_time > 25:
+                                logger.warning(f"API calls for statement took {elapsed_time}s, risking timeout for {student_id}", extra=extra_log)
+
+                            logger.debug(f"Account Statement for {student_id}, Term {term}: "
+                                         f"API account data: {account}, "
+                                         f"Billed fees: {billed_fees}, "
+                                         f"Payments: {payments}", extra=extra_log)
+
+                            total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
+                            total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
+                            balance = total_fees - total_paid
+
+                            student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                            if not billed_fees.get("data", {}).get("bills"):
+                                statement_text = f"*No fees recorded for {student_id} ({student_name}) in term {term}.*"
+                            else:
+                                payment_details = (
+                                    "\n".join(
+                                        [f"- *${p['amount']:.2f}* on _{p.get('date', 'N/A')}_ ({p.get('fee_type', 'N/A')})" for p in payments.get("data", {}).get("payments", [])]
+                                    )
+                                    if payments.get("data", {}).get("payments")
+                                    else "No payments recorded."
+                                )
+                                fee_details = (
+                                    "\n".join(
+                                        [f"- *${b['amount']:.2f}* on _{b.get('date', 'N/A')}_ ({b.get('fee_type', 'N/A')})" for b in billed_fees.get("data", {}).get("bills")]
+                                    )
+                                    if billed_fees.get("data", {}).get("bills")
+                                    else "No fees recorded."
+                                )
+                                statement_text = (
+                                    f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
+                                    f"*Total Fees*: ${total_fees:.2f}\n"
+                                    f"*Total Paid*: ${total_paid:.2f}\n"
+                                    f"*Balance Owed*: ${balance:.2f}\n"
+                                    f"*Fees Charged*:\n{fee_details}\n"
+                                    f"*Payments*:\n{payment_details}"
+                                ) if balance != 0.0 or total_fees <= 0.0 else (
+                                    f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
+                                    f"*Great news!* Balance is *fully paid*.\n"
+                                    f"*Total Fees*: ${total_fees:.2f}\n"
+                                    f"*Total Paid*: ${total_paid:.2f}\n"
+                                    f"*Balance Owed*: ${balance:.2f}\n"
+                                    f"*Fees Charged*:\n{fee_details}\n"
+                                    f"*Payments*:\n{payment_details}"
+                                )
+
+                                if len(statement_text) > max_message_length:
+                                    statement_text = statement_text[:max_message_length - 50] + "\n*Note*: Statement truncated due to length. Contact admin for full details."
+                            statement_texts.append(statement_text)
+
+                        if not statement_texts:
+                            statement_text = (
+                                f"📊 *Hi {fullname},*\n"
+                                f"No account statements found for any students in term *{term}*. Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                            )
+                            whatsapp_response = send_whatsapp_message(whatsapp_number, statement_text)
+                            if whatsapp_response.get("status") != "sent":
+                                logger.error(f"Failed to send statement: {whatsapp_response.get('error', 'Unknown error')}", extra=extra_log)
+                                response_message = response.message(
+                                    f"⚠️ *Hi {fullname},*\n*Failed to send statements.* Please try again or contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                                )
+                            else:
+                                response_message = response.message(
+                                    f"📨 *Hi {fullname},*\n*Statements have been sent for all students.*\n{menu_text}"
+                                )
+                        else:
+                            combined_text = f"📊 *Hi {fullname},*\n" + "\n\n".join(statement_texts) + f"\n{menu_text}"
+                            if len(combined_text) > max_message_length:
+                                for statement in statement_texts:
+                                    full_message = f"📊 *Hi {fullname},*\n{statement}\n{menu_text}"
+                                    if len(full_message) > max_message_length:
+                                        full_message = full_message[:max_message_length - 50] + "\n*Note*: Statement truncated. Contact admin for full details.\n{menu_text}"
+                                    whatsapp_response = send_whatsapp_message(whatsapp_number, full_message)
+                                    if whatsapp_response.get("status") != "sent":
+                                        logger.error(f"Failed to send statement for {whatsapp_number}: {whatsapp_response.get('error', 'Unknown error')}", extra=extra_log)
+                                        response_message = response.message(
+                                            f"⚠️ *Hi {fullname},*\n*Failed to send statements.* Please try again or contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                                        )
+                                        user_state.state = "main_menu"
+                                        user_state.last_updated = current_time
+                                        session.commit()
+                                        session.close()
+                                        return Response(str(response), mimetype="application/xml")
+                                response_message = response.message(
+                                    f"📨 *Hi {fullname},*\n*Statements have been sent for all students.*\n{menu_text}"
+                                )
+                            else:
+                                statement_text = combined_text
+                                whatsapp_response = send_whatsapp_message(whatsapp_number, statement_text)
+                                if whatsapp_response.get("status") != "sent":
+                                    logger.error(f"Failed to send statement: {whatsapp_response.get('error', 'Unknown error')}", extra=extra_log)
+                                    response_message = response.message(
+                                        f"⚠️ *Hi {fullname},*\n*Failed to send statements.* Please try again or contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                                    )
+                                else:
+                                    response_message = response.message(
+                                        f"📨 *Hi {fullname},*\n*Statements have been sent for all students.*\n{menu_text}"
+                                    )
+
+                        logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                        user_state.state = "main_menu"
+                        user_state.last_updated = current_time
+                        session.commit()
+                        session.close()
+                        return Response(str(response), mimetype="application/xml")
+
+                    except RateLimitException:
+                        logger.warning(f"Rate limit hit while fetching statement for {student_ids}, term {term}", extra=extra_log)
+                        response_message = response.message(
+                            f"⚠️ *Hi {fullname},*\n*Too many requests.* Please try again shortly.\n{menu_text}"
+                        )
+                        user_state.state = "main_menu"
+                        user_state.last_updated = current_time
+                        session.commit()
+                        logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                        session.close()
+                        return Response(str(response), mimetype="application/xml")
+                    except Exception as e:
+                        logger.error(f"Unexpected error in statement generation for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
+                        response_message = response.message(
+                            f"⚠️ *Hi {fullname},*\n"
+                            f"*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                        )
+                        user_state.state = "main_menu"
+                        user_state.last_updated = current_time
+                        session.commit()
+                        logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                        session.close()
+                        return Response(str(response), mimetype="application/xml")
+
 
             else:
                 response_message = response.message(

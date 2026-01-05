@@ -25,15 +25,64 @@ class Config:
     AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-2")  # Match S3 region
 
     TERM_START_DATES = {
+        # 2025 terms (historical data)
         "2025-1": datetime(2025, 1, 1, tzinfo=timezone.utc),
         "2025-2": datetime(2025, 5, 5, tzinfo=timezone.utc),
         "2025-3": datetime(2025, 9, 1, tzinfo=timezone.utc),
+        # 2026 terms (current academic year)
+        # Note: Term 2026-1 starts Jan 4 to allow early fee payments before school opens
+        "2026-1": datetime(2026, 1, 4, tzinfo=timezone.utc),
+        "2026-2": datetime(2026, 5, 4, tzinfo=timezone.utc),
+        "2026-3": datetime(2026, 9, 7, tzinfo=timezone.utc),
     }
     TERM_END_DATES = {
+        # 2025 terms (historical data)
         "2025-1": datetime(2025, 3, 31, tzinfo=timezone.utc),
         "2025-2": datetime(2025, 7, 31, tzinfo=timezone.utc),
         "2025-3": datetime(2025, 12, 15, tzinfo=timezone.utc),
+        # 2026 terms (current academic year)
+        "2026-1": datetime(2026, 4, 2, tzinfo=timezone.utc),
+        "2026-2": datetime(2026, 8, 6, tzinfo=timezone.utc),
+        "2026-3": datetime(2026, 12, 3, tzinfo=timezone.utc),
     }
+
+    @classmethod
+    def get_current_term(cls):
+        """Returns the currently active term based on today's date, or None if between terms."""
+        today = datetime.now(timezone.utc).date()
+        for term, start in cls.TERM_START_DATES.items():
+            if start.date() <= today <= cls.TERM_END_DATES[term].date():
+                return term
+        return None
+
+    @classmethod
+    def get_most_recent_completed_term(cls):
+        """Returns the most recently completed term."""
+        today = datetime.now(timezone.utc).date()
+        completed_terms = [
+            (term, end) for term, end in cls.TERM_END_DATES.items()
+            if end.date() < today
+        ]
+        if completed_terms:
+            return max(completed_terms, key=lambda x: x[1])[0]
+        return None
+
+    @classmethod
+    def get_next_term(cls):
+        """Returns the next upcoming term, or None if in current/last term."""
+        today = datetime.now(timezone.utc).date()
+        upcoming_terms = [
+            (term, start) for term, start in cls.TERM_START_DATES.items()
+            if start.date() > today
+        ]
+        if upcoming_terms:
+            return min(upcoming_terms, key=lambda x: x[1])[0]
+        return None
+
+    @classmethod
+    def is_between_terms(cls):
+        """Returns True if currently between terms (on break), False otherwise."""
+        return cls.get_current_term() is None
 
     @classmethod
     def get_term_window(cls, term_code: str):
