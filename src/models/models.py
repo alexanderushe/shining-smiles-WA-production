@@ -50,3 +50,16 @@ class FailedSync(Base):
     student_id = Column(String)
     error = Column(String)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+class Invoice(Base):
+    __tablename__ = 'invoices'
+    id = Column(Integer, primary_key=True)
+    invoice_number = Column(String(50), unique=True, nullable=False)
+    student_id = Column(String(20), nullable=False)
+    term = Column(String(10), nullable=False)
+    issued_date = Column(DateTime, nullable=False)
+    due_date = Column(DateTime, nullable=False)
+    whatsapp_number = Column(String(20))
+    total_amount = Column(Float)
+    pdf_path = Column(String(255))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

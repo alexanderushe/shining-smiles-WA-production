@@ -85,6 +85,19 @@ class GatePassRequestLog(Base):
     request_count = Column(Integer, default=0)
     last_request_date = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
+class Invoice(Base):
+    __tablename__ = 'invoices'
+    id = Column(Integer, primary_key=True)
+    invoice_number = Column(String(50), unique=True, nullable=False)
+    student_id = Column(String(20), nullable=False)
+    term = Column(String(10), nullable=False)
+    issued_date = Column(DateTime(timezone=True), nullable=False)
+    due_date = Column(DateTime(timezone=True), nullable=False)
+    whatsapp_number = Column(String(20))
+    total_amount = Column(Float)
+    pdf_path = Column(String(255))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
+
 def get_secret(secret_name):
     """Retrieve secret from AWS Secrets Manager with fallback to env var."""
     import signal
