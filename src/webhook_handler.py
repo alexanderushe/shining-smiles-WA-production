@@ -72,6 +72,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
         "➊ *View Balance*\n"
         "➋ *Request Statement*\n"
         "➌ *Get Gate Pass*\n"
+        "➍ *Request Invoice*\n"
         "──────────────\n"
         "_Reply 'menu' anytime to see options_"
     )
@@ -589,6 +590,108 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                     return f"❌ *Hi {fullname},*\n*Failed to generate gate passes* for term *{default_term}*. Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
                 except Exception as e:
                     logger.error(f"Unexpected error in gate pass generation for {student_ids}, term {default_term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    return f"⚠️ *Hi {fullname},*\n*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+
+            elif message_body in ["4", "invoice", "request invoice"]:
+                # Auto-detect current term
+                term = config.get_current_term() or config.get_most_recent_completed_term()
+                
+                if not term:
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    return f"⚠️ *Hi {fullname},*\n*No term data available.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                
+                try:
+                    from services.invoice_service import generate_invoice
+                    
+                    invoice_results = []
+                    for student_id in student_ids:
+                        try:
+                            invoice_data, status_code = generate_invoice(student_id, term, whatsapp_number, request_id)
+                            
+                            if status_code == 200:
+                                invoice_results.append({
+                                    "student_id": student_id,
+                                    "success": True,
+                                    "data": invoice_data
+                                })
+                            else:
+                                invoice_results.append({
+                                    "student_id": student_id,
+                                    "success": False,
+                                    "error": invoice_data.get("error", "Unknown error")
+                                })
+                        except Exception as e:
+                            logger.error(f"Error generating invoice for {student_id}: {str(e)}", extra=extra_log)
+                            invoice_results.append({
+                                "student_id": student_id,
+                                "success": False,
+                                "error": str(e)
+                            })
+                    
+                    # Build response for all students
+                    success_messages = []
+                    error_messages = []
+                    
+                    for result in invoice_results:
+                        if result["success"]:
+                            data = result["data"]
+                            student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == result["student_id"]), "Unknown")
+                            
+                            # Send PDF via WhatsApp
+                            try:
+                                # Send text message first
+                                message = (
+                                    f"✅ *Invoice Generated!*\n\n"
+                                    f"📄 Invoice No: {data['invoice_number']}\n"
+                                    f"👤 Student: {student_name} ({result['student_id']})\n"
+                                    f"📅 Term: {term}\n"
+                                    f"💵 Total: ${data['total_amount']:.2f}\n"
+                                    f"📆 Due Date: {data['due_date']}\n\n"
+                                    f"📎 PDF being sent separately..."
+                                )
+                                send_whatsapp_message(whatsapp_number, message)
+                                
+                                # Send PDF
+                                send_whatsapp_message(
+                                    whatsapp_number,
+                                    data['pdf_url'],
+                                    media_url=data['pdf_url']
+                                )
+                                
+                                success_messages.append(f"✅ {student_name} ({result['student_id']}) - Invoice {data['invoice_number']}")
+                            except Exception as e:
+                                logger.error(f"Failed to send invoice via WhatsApp for {result['student_id']}: {str(e)}", extra=extra_log)
+                                error_messages.append(f"❌ {result['student_id']} - Failed to send")
+                        else:
+                            error_messages.append(f"❌ {result['student_id']} - {result['error']}")
+                    
+                    # Final summary message
+                    if success_messages:
+                        response_text = f"*Hi {fullname},*\n\n" + "\n".join(success_messages)
+                        if error_messages:
+                            response_text += "\n\n" + "\n".join(error_messages)
+                        response_text += f"\n\n💡 Need invoice for another term?\nReply 'invoice {term}'\n\n{menu_text}"
+                    else:
+                        response_text = f"*Hi {fullname},*\n\n❌ *Unable to generate invoices:*\n\n" + "\n".join(error_messages) + f"\n\nPlease contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                    
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    return response_text
+                    
+                except ImportError as e:
+                    logger.error(f"Failed to import invoice_service: {str(e)}", extra=extra_log)
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    return f"⚠️ *Hi {fullname},*\n*Invoice service temporarily unavailable.* Please try again later or contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                except Exception as e:
+                    logger.error(f"Unexpected error in invoice generation flow: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     user_state.state = "main_menu"
                     user_state.last_updated = current_time
                     session.commit()
@@ -1163,6 +1266,87 @@ def send_whatsapp_message_real(to: str, message: str):
 def lambda_handler(event, context):
     print("🎯 DEBUG: Lambda handler started")
     print("🎯 DEBUG: Event keys:", list(event.keys()))
+    
+    # Handle admin database update action
+    if event.get("action") == "admin_update_phones":
+        print("🔧 ADMIN: Updating phone numbers")
+        try:
+            from utils.database import init_db
+            from sqlalchemy import text
+            session = init_db()
+            engine = session.get_bind()
+            
+            results = []
+            
+            with engine.connect() as conn:
+                # First, check if SSC20257986 exists
+                check_result = conn.execute(text("""
+                    SELECT student_id, firstname, lastname 
+                    FROM student_contacts 
+                    WHERE student_id = 'SSC20246303'
+                """))
+                exists = list(check_result)
+                if not exists:
+                    results.append("⚠️ SSC20246303 NOT FOUND in database!")
+                    results.append("Searching for any student with +263711206287...")
+                    
+                    # Find who has this number
+                    search_result = conn.execute(text("""
+                        SELECT student_id, firstname, lastname, guardian_mobile_number, preferred_phone_number
+                        FROM student_contacts 
+                        WHERE guardian_mobile_number LIKE '%711206287%' 
+                           OR preferred_phone_number LIKE '%711206287%'
+                        LIMIT 10
+                    """))
+                    for row in search_result:
+                        results.append(str(dict(row._mapping)))
+                else:
+                    results.append(f"✅ Found: {exists[0]}")
+                
+                # Query both students first
+                query_result = conn.execute(text("""
+                    SELECT student_id, firstname, lastname, guardian_mobile_number, preferred_phone_number
+                    FROM student_contacts 
+                    WHERE student_id IN ('SSC20257279', 'SSC20246303')
+                """))
+                results.append("=== BEFORE UPDATE ===")
+                for row in query_result:
+                    results.append(str(dict(row._mapping)))
+                
+                # Update SSC20257986 - add +263711206287
+                conn.execute(text("""
+                    UPDATE student_contacts 
+                    SET preferred_phone_number = '+263711206287',
+                        guardian_mobile_number = '+263711206287'
+                    WHERE student_id = 'SSC20246303'
+                """))
+                results.append("✅ SSC20246303 updated with +263711206287")
+                
+                # Update SSC20257279 - remove +263711206287  
+                conn.execute(text("""
+                    UPDATE student_contacts 
+                    SET preferred_phone_number = NULL,
+                        guardian_mobile_number = NULL
+                    WHERE student_id = 'SSC20257279'
+                """))
+                results.append("✅ SSC20257279 cleared")
+                
+                conn.commit()
+                
+                # Verify changes
+                query_result = conn.execute(text("""
+                    SELECT student_id, firstname, lastname, guardian_mobile_number, preferred_phone_number
+                    FROM student_contacts 
+                    WHERE student_id IN ('SSC20257279', 'SSC20246303')
+                """))
+                results.append("=== AFTER UPDATE ===")
+                for row in query_result:
+                    results.append(str(dict(row._mapping)))
+            
+            session.remove()
+            return {"statusCode": 200, "body": json.dumps(results, indent=2)}
+        except Exception as e:
+            return {"statusCode": 500, "body": f"Error: {str(e)}"}
     
     # Check for Scheduled Event (EventBridge)
     if event.get("source") == "aws.events":
