@@ -103,8 +103,22 @@ def generate_ai_response(user_message: str, context: str = None) -> str:
         
         if "school_calendar" in knowledge:
             cal = knowledge["school_calendar"]
-            system_prompt += f"📅 **Term 3 Dates**: Opens {cal.get('term_3_opening', 'TBD')}, Closes {cal.get('term_3_closing', 'TBD')}\n\n"
-        
+            term_name = cal.get('term', 'Current Term')
+            opens = cal.get('opening_date', 'TBD')
+            closes = cal.get('closing_date', 'TBD')
+            system_prompt += f"📅 **{term_name}**: Opens {opens}, Closes {closes}\n\n"
+
+        # --- EVENTS SECTION ---
+        if "events" in knowledge:
+            events = knowledge["events"]
+            system_prompt += "🎉 **Upcoming Events**:\n"
+            # Take first 50 events to avoid hitting token limits if list is huge
+            for event in events[:50]: 
+                date_str = event.get('date') or event.get('date_range') or 'TBD'
+                title = event.get('title', 'Event')
+                system_prompt += f"  - {date_str}: {title}\n"
+            system_prompt += "\n"
+
         if "contacts" in knowledge:
             contacts = knowledge["contacts"]
             system_prompt += f"📞 **Contacts**: {', '.join(contacts.get('phone', []))}\n"
@@ -173,7 +187,10 @@ def generate_ai_response(user_message: str, context: str = None) -> str:
         
         # Add FAQs reference
         if "faqs" in knowledge:
-            system_prompt += "Use the FAQs in the knowledge base to answer common questions accurately.\n\n"
+            system_prompt += "❓ **FAQs**:\n"
+            for q, a in knowledge["faqs"].items():
+                system_prompt += f"Q: {q.replace('_', ' ')}?\nA: {a.get('short_answer', '')}\n"
+            system_prompt += "\n"
         
         system_prompt += "**CRITICAL**: When asked about school dates, locations, fees, or policies, ALWAYS use the exact information above. Never give generic or uncertain answers."
 

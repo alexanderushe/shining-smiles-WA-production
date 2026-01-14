@@ -102,12 +102,13 @@ def get_invoice_line_items(student_id, term, sms_client, extra_log):
         extra_log (dict): Logging context
     
     Returns:
-        dict: Contains 'items' (list of line items), 'student_profile', and 'total_amount'
+        dict: Contains 'items' (list of line items with payment info), 'student_profile', and 'total_amount'
     """
     try:
         # Fetch data from School SMS API
         account_statement = sms_client.get_student_account_statement(student_id, term)
         billed_fees = sms_client.get_student_billed_fees(student_id, term)
+        payments = sms_client.get_student_payments(student_id, term)
         
         # Extract student info from account statement
         data = account_statement.get("data", {})
@@ -119,47 +120,78 @@ def get_invoice_line_items(student_id, term, sms_client, extra_log):
         
         grade = data.get("current_grade", "Unknown")
         
-        # Parse billed fees
+        # Parse billed fees and payments
         fees_list = billed_fees.get("data", {}).get("bills", [])
-        items = []
-        total_amount = 0.0
+        payments_list = payments.get("data", {}).get("payments", [])
         
-        # Tuition - always mandatory
-        tuition_fees = [f for f in fees_list if 'tuition' in f.get('fee_type', '').lower() or 'school fee' in f.get('fee_type', '').lower()]
-        if tuition_fees:
-            amount = float(tuition_fees[0]['amount'])
+        items = []
+        total_billed = 0.0
+        total_paid = 0.0
+        
+        # Helper function to match payments to fee type
+        def get_payments_for_fee_type(fee_type_keywords):
+            """Find all payments that match the given fee type keywords"""
+            matched_payments = []
+            for payment in payments_list:
+                payment_fee_type = payment.get('fee_type', '').lower()
+                if any(keyword in payment_fee_type for keyword in fee_type_keywords):
+                    matched_payments.append(float(payment.get('amount', 0)))
+            return sum(matched_payments)
+        
+        # 1. Tuition & Levies (Mandatory)
+        tuition_keywords = ['tuition', 'school fee', 'levy', 'term', 'education', 'general', 'admin']
+        tuition_billed = sum(float(f['amount']) for f in fees_list if any(k in f.get('fee_type', '').lower() for k in tuition_keywords))
+        tuition_paid = get_payments_for_fee_type(tuition_keywords)
+        
+        if tuition_billed > 0 or tuition_paid > 0:
             items.append({
-                "description": f"Tuition Fee - Term {term} ({grade})",
-                "amount": amount,
+                "description": f"Tuition & Levies - Term {term} ({grade})",
+                "amount_billed": tuition_billed,
+                "amount_paid": tuition_paid,
+                "balance": tuition_billed - tuition_paid,
                 "mandatory": True,
                 "qty": 1
             })
-            total_amount += amount
+            total_billed += tuition_billed
+            total_paid += tuition_paid
         
-        # Hot Meals - mandatory for ECD, optional for others
-        hot_meals_fees = [f for f in fees_list if 'meal' in f.get('fee_type', '').lower() or 'hot meal' in f.get('fee_type', '').lower()]
-        if hot_meals_fees:
-            amount = float(hot_meals_fees[0]['amount'])
+        # 2. Hot Meals (Mandatory for ECD, Optional for others)
+        meal_keywords = ['meal', 'hot meal', 'lunch', 'food', 'feeding']
+        meal_billed = sum(float(f['amount']) for f in fees_list if any(k in f.get('fee_type', '').lower() for k in meal_keywords))
+        meal_paid = get_payments_for_fee_type(meal_keywords)
+        
+        if meal_billed > 0 or meal_paid > 0:
             mandatory = is_hot_meals_mandatory(grade)
             items.append({
-                "description": "Hot Meals" + (" (Mandatory - ECD)" if mandatory else " (Optional)"),
-                "amount": amount,
+                "description": "Hot Meals/Feeding" + (" (Mandatory - ECD)" if mandatory else " (Optional)"),
+                "amount_billed": meal_billed,
+                "amount_paid": meal_paid,
+                "balance": meal_billed - meal_paid,
                 "mandatory": mandatory,
                 "qty": 1
             })
-            total_amount += amount
+            total_billed += meal_billed
+            total_paid += meal_paid
         
-        # Transport - always optional
-        transport_fees = [f for f in fees_list if 'transport' in f.get('fee_type', '').lower()]
-        if transport_fees:
-            amount = float(transport_fees[0]['amount'])
+        # 3. Transport (Optional)
+        transport_keywords = ['transport', 'bus', 'shuttle', 'drive']
+        transport_billed = sum(float(f['amount']) for f in fees_list if any(k in f.get('fee_type', '').lower() for k in transport_keywords))
+        transport_paid = get_payments_for_fee_type(transport_keywords)
+        
+        if transport_billed > 0 or transport_paid > 0:
             items.append({
                 "description": "Transport Service (Optional)",
-                "amount": amount,
+                "amount_billed": transport_billed,
+                "amount_paid": transport_paid,
+                "balance": transport_billed - transport_paid,
                 "mandatory": False,
                 "qty": 1
             })
-            total_amount += amount
+            total_billed += transport_billed
+            total_paid += transport_paid
+
+        # Calculate any unallocated payments (if needed in future)
+        # For now, we strictly stick to the 3 main categories as requested
         
         return {
             "student_profile": {
@@ -168,12 +200,15 @@ def get_invoice_line_items(student_id, term, sms_client, extra_log):
                 "grade": grade
             },
             "items": items,
-            "total_amount": total_amount
+            "total_billed": total_billed,
+            "total_paid": total_paid,
+            "total_balance": total_billed - total_paid
         }
     
     except Exception as e:
         logger.error(f"Error fetching invoice line items for {student_id}: {str(e)}", extra=extra_log)
         raise
+
 
 
 def create_digital_stamp(pdf, x, y, issue_date):
@@ -374,26 +409,50 @@ def create_invoice_pdf(invoice_data, output_path, extra_log):
         pdf.ln(8)
         
         # --- LINE ITEMS TABLE ---
-        # Table Header
+        # Table Header - now with payment columns
         pdf.set_font('Helvetica', 'B', 10)
         pdf.set_fill_color(200, 220, 255)  # Light blue
         pdf.set_draw_color(100, 100, 100)  # Grey borders
         
-        pdf.cell(100, 8, "DESCRIPTION", 1, 0, "L", True)
-        pdf.cell(30, 8, "QTY", 1, 0, "C", True)
-        pdf.cell(50, 8, f"AMOUNT ({SCHOOL_INFO['currency']})", 1, 1, "R", True)
+        pdf.cell(70, 8, "DESCRIPTION", 1, 0, "L", True)
+        pdf.cell(35, 8, f"BILLED ({SCHOOL_INFO['currency']})", 1, 0, "R", True)
+        pdf.cell(35, 8, f"PAID ({SCHOOL_INFO['currency']})", 1, 0, "R", True)
+        pdf.cell(40, 8, f"BALANCE ({SCHOOL_INFO['currency']})", 1, 1, "R", True)
         
-        # Line Items - keep original optional/mandatory indicators
+        # Line Items with payment information
         pdf.set_font('Helvetica', '', 10)
         for item in invoice_data['items']:
-            pdf.cell(100, 8, f"  {item['description']}", 1, 0, "L")
-            pdf.cell(30, 8, str(item['qty']), 1, 0, "C")
-            pdf.cell(50, 8, f"${item['amount']:.2f}", 1, 1, "R")
+            pdf.cell(70, 8, f"  {item['description']}", 1, 0, "L")
+            pdf.cell(35, 8, f"${item['amount_billed']:.2f}", 1, 0, "R")
+            pdf.cell(35, 8, f"${item['amount_paid']:.2f}", 1, 0, "R")
+            # Highlight balance if outstanding
+            if item['balance'] > 0:
+                pdf.set_text_color(200, 0, 0)  # Red for outstanding balance
+            pdf.cell(40, 8, f"${item['balance']:.2f}", 1, 1, "R")
+            pdf.set_text_color(0, 0, 0)  # Reset to black
         
-        # TOTAL ROW
+        # TOTAL ROWS
         pdf.set_font('Helvetica', 'B', 11)
-        pdf.cell(130, 10, "TOTAL:", 1, 0, "R")
-        pdf.cell(50, 10, f"${invoice_data['total_amount']:.2f}", 1, 1, "R")
+        
+        # Total Billed
+        pdf.cell(70, 8, "TOTAL BILLED:", 1, 0, "R")
+        pdf.cell(35, 8, f"${invoice_data['total_billed']:.2f}", 1, 0, "R")
+        pdf.cell(75, 8, "", 1, 1)  # Empty cells
+        
+        # Total Paid
+        pdf.cell(70, 8, "TOTAL PAID:", 1, 0, "R")
+        pdf.cell(35, 8, "", 1, 0)  # Empty cell
+        pdf.cell(35, 8, f"${invoice_data['total_paid']:.2f}", 1, 0, "R")
+        pdf.cell(40, 8, "", 1, 1)  # Empty cell
+        
+        # Outstanding Balance
+        pdf.cell(70, 8, "OUTSTANDING BALANCE:", 1, 0, "R")
+        pdf.cell(70, 8, "", 1, 0)  # Empty cells
+        if invoice_data['total_balance'] > 0:
+            pdf.set_text_color(200, 0, 0)  # Red for outstanding
+        pdf.cell(40, 8, f"${invoice_data['total_balance']:.2f}", 1, 1, "R")
+        pdf.set_text_color(0, 0, 0)  # Reset to black
+
         
         pdf.ln(10)
         
@@ -549,7 +608,9 @@ def generate_invoice(student_id, term, whatsapp_number, request_id=None):
             "student_id": student_id,
             "grade": invoice_info['student_profile']['grade'],
             "items": invoice_info['items'],
-            "total_amount": invoice_info['total_amount'],
+            "total_billed": invoice_info['total_billed'],
+            "total_paid": invoice_info['total_paid'],
+            "total_balance": invoice_info['total_balance'],
             "branch_address": BRANCH_ADDRESSES.get("Hatfield", BRANCH_ADDRESSES["default"])  # TODO: Detect branch from student data
         }
         
@@ -582,7 +643,7 @@ def generate_invoice(student_id, term, whatsapp_number, request_id=None):
             issued_date=issued_date,
             due_date=due_date,
             whatsapp_number=whatsapp_number,
-            total_amount=invoice_info['total_amount'],
+            total_amount=invoice_info['total_billed'],  # Store total billed as total_amount
             pdf_path=s3_key
         )
         session.add(new_invoice)
@@ -593,9 +654,12 @@ def generate_invoice(student_id, term, whatsapp_number, request_id=None):
         return {
             "invoice_number": invoice_number,
             "pdf_url": pdf_url,
-            "total_amount": invoice_info['total_amount'],
+            "total_amount": invoice_info['total_billed'],
+            "total_paid": invoice_info['total_paid'],
+            "total_balance": invoice_info['total_balance'],
             "issued_date": pdf_data['issued_date'],
             "due_date": pdf_data['due_date'],
+            "student_name": invoice_info['student_profile']['name'],
             "is_resend": False
         }, 200
     

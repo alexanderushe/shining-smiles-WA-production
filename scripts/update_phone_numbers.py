@@ -17,41 +17,24 @@ def lambda_handler(event, context):
     results = []
     
     with engine.connect() as conn:
-        # Query SSC20257279 first
+        # Query SSC20246303 (Thando Mujeni) before update
         query_result = conn.execute(text("""
             SELECT student_id, firstname, lastname, guardian_mobile_number, preferred_phone_number
             FROM student_contacts 
-            WHERE student_id = 'SSC20257279'
+            WHERE student_id = 'SSC20246303'
         """))
+        results.append("=== BEFORE UPDATE ===")
         for row in query_result:
-            results.append(f"SSC20257279: {row}")
+            results.append(f"SSC20246303: {row}")
         
-        # Query SSC20247124
-        query_result = conn.execute(text("""
-            SELECT student_id, firstname, lastname, guardian_mobile_number, preferred_phone_number
-            FROM student_contacts 
-            WHERE student_id = 'SSC20247124'
-        """))
-        for row in query_result:
-            results.append(f"SSC20247124: {row}")
-        
-        # Update SSC20247124 - add +263711206287
+        # Update SSC20246303 - Thando Mujeni with +263711206287
         conn.execute(text("""
             UPDATE student_contacts 
             SET preferred_phone_number = '+263711206287',
                 guardian_mobile_number = '+263711206287'
-            WHERE student_id = 'SSC20247124'
+            WHERE student_id = 'SSC20246303'
         """))
-        results.append("✅ SSC20247124 updated with +263711206287")
-        
-        # Update SSC20257279 - remove +263711206287  
-        conn.execute(text("""
-            UPDATE student_contacts 
-            SET preferred_phone_number = NULL,
-                guardian_mobile_number = NULL
-            WHERE student_id = 'SSC20257279'
-        """))
-        results.append("✅ SSC20257279 cleared")
+        results.append("✅ SSC20246303 (Thando Mujeni) updated with +263711206287")
         
         conn.commit()
         
@@ -59,13 +42,14 @@ def lambda_handler(event, context):
         query_result = conn.execute(text("""
             SELECT student_id, firstname, lastname, guardian_mobile_number, preferred_phone_number
             FROM student_contacts 
-            WHERE student_id IN ('SSC20257279', 'SSC20247124')
+            WHERE student_id = 'SSC20246303'
         """))
-        results.append("--- After Update ---")
+        results.append("=== AFTER UPDATE ===")
         for row in query_result:
-            results.append(str(row))
+            results.append(f"SSC20246303: {row}")
     
     return {
         'statusCode': 200,
         'body': json.dumps(results, indent=2)
     }
+

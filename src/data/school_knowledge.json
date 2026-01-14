@@ -22,9 +22,241 @@
     "branch_4": "📍 50 Alexandra Drive, Hatfield, Harare, Zimbabwe."
   },
   "school_calendar": {
-    "term_3_opening": "📅 9 September 2025",
-    "term_3_closing": "📅 4 December 2025"
+    "term": "Term 1 2026",
+    "opening_date": "2026-01-12",
+    "closing_date": "2026-04-03",
+    "closing_time": "10:00"
   },
+  "events": [
+    {
+      "date_range": "2026-01-05 to 2026-01-09",
+      "title": "Orientation & Meet the Teacher",
+      "category": "Orientation",
+      "grades": [
+        "ECD A",
+        "ECD B",
+        "Grade 1",
+        "Grade 2",
+        "Grade 3",
+        "Grade 4",
+        "Grade 5",
+        "Grade 6",
+        "Grade 7"
+      ],
+      "details": {
+        "ECD A": "09:00–11:00",
+        "ECD B": "12:00–14:00",
+        "Grades 1 & 5": "09:00–11:00",
+        "Grades 2 & 6": "12:00–14:00",
+        "Grades 3 & 7": "09:00–11:00",
+        "Grade 4": "12:00–14:00"
+      },
+      "notes": "Parents to attend. No formal lessons."
+    },
+    {
+      "date": "2026-01-12",
+      "title": "School Opens",
+      "category": "Academic",
+      "grades": "All",
+      "notes": "Start of Term 1 lessons"
+    },
+    {
+      "date": "2026-02-03",
+      "title": "Grade 2 Educational Tour – Fire Station",
+      "category": "Educational Tour",
+      "grades": [
+        "Grade 2"
+      ]
+    },
+    {
+      "date": "2026-02-04",
+      "title": "Grade 1 Educational Tour – Pizza Making",
+      "category": "Educational Tour",
+      "grades": [
+        "Grade 1"
+      ],
+      "location": "Msasa"
+    },
+    {
+      "date": "2026-02-05",
+      "title": "Prefects Investiture",
+      "category": "School Event",
+      "grades": [
+        "Prefects"
+      ],
+      "location": "14 Alexandra"
+    },
+    {
+      "date_range": "2026-02-26 to 2026-02-28",
+      "title": "Grade 3–7 Athletics Interhouse",
+      "category": "Sports",
+      "grades": [
+        "Grade 3",
+        "Grade 4",
+        "Grade 5",
+        "Grade 6",
+        "Grade 7"
+      ],
+      "location": "Hatfield Sports Club"
+    },
+    {
+      "date": "2026-02-10",
+      "title": "Colts & First Team Cricket",
+      "category": "Sports",
+      "grades": [
+        "Colts",
+        "First Team"
+      ],
+      "location": "Wise Owl"
+    },
+    {
+      "date": "2026-02-11",
+      "title": "St Acacia Cross Country",
+      "category": "Sports",
+      "grades": "Selected Athletes"
+    },
+    {
+      "date": "2026-02-13",
+      "title": "Civvies Day & Valentine’s Day",
+      "category": "Social",
+      "grades": "All",
+      "dress_code": "Red & White"
+    },
+    {
+      "date": "2026-03-02",
+      "title": "Grade 5 Educational Tour – Meteorological Department",
+      "category": "Educational Tour",
+      "grades": [
+        "Grade 5"
+      ]
+    },
+    {
+      "date": "2026-03-03",
+      "title": "Chess Match vs Kids Camp Primary",
+      "category": "Sports",
+      "grades": [
+        "Chess Team"
+      ]
+    },
+    {
+      "date": "2026-03-04",
+      "title": "Grade 6 Educational Tour – New Parliament",
+      "category": "Educational Tour",
+      "grades": [
+        "Grade 6"
+      ]
+    },
+    {
+      "date": "2026-03-05",
+      "title": "Athletics Meet",
+      "category": "Sports",
+      "grades": "Selected Athletes",
+      "location": "Direct Contact"
+    },
+    {
+      "date_range": "2026-03-07 to 2026-03-08",
+      "title": "Exeat Weekend",
+      "category": "Exeat",
+      "grades": "All"
+    },
+    {
+      "date": "2026-03-09",
+      "title": "Shining Smiles Junior Athletics Meet",
+      "category": "Sports",
+      "grades": "Junior School",
+      "location": "Ziko"
+    },
+    {
+      "date": "2026-03-10",
+      "title": "Grade 4 Educational Tour – Wild is Life",
+      "category": "Educational Tour",
+      "grades": [
+        "Grade 4"
+      ]
+    },
+    {
+      "date": "2026-03-11",
+      "title": "Cricket Fixture",
+      "category": "Sports",
+      "grades": [
+        "Cricket Team"
+      ],
+      "location": "Ziko"
+    },
+    {
+      "date": "2026-03-12",
+      "title": "Grade 7 Educational Tour – UZ Farm",
+      "category": "Educational Tour",
+      "grades": [
+        "Grade 7"
+      ]
+    },
+    {
+      "date": "2026-03-13",
+      "title": "Civvies Day",
+      "category": "Social",
+      "grades": "All"
+    },
+    {
+      "date": "2026-03-16",
+      "title": "Trotting Tortoise Cross Country",
+      "category": "Sports",
+      "grades": "Selected Athletes",
+      "location": "Ariel School"
+    },
+    {
+      "date": "2026-03-17",
+      "title": "Grade 3 Educational Tour – Gwebi",
+      "category": "Educational Tour",
+      "grades": [
+        "Grade 3"
+      ]
+    },
+    {
+      "date_range": "2026-03-18 to 2026-03-19",
+      "title": "Exeat Weekend",
+      "category": "Exeat",
+      "grades": "All"
+    },
+    {
+      "date_range": "2026-03-16 to 2026-03-27",
+      "title": "Examinations",
+      "category": "Academic",
+      "grades": "All"
+    },
+    {
+      "date": "2026-03-24",
+      "title": "ECD A & B Athletics Interhouse",
+      "category": "Sports",
+      "grades": [
+        "ECD A",
+        "ECD B"
+      ]
+    },
+    {
+      "date": "2026-03-25",
+      "title": "Grade 1 & 2 Athletics Interhouse",
+      "category": "Sports",
+      "grades": [
+        "Grade 1",
+        "Grade 2"
+      ]
+    },
+    {
+      "date": "2026-03-26",
+      "title": "Music Masterclass",
+      "category": "Academic Enrichment",
+      "grades": "Selected Students",
+      "location": "Eland Oak"
+    },
+    {
+      "date": "2026-04-03",
+      "title": "School Closes",
+      "category": "Academic",
+      "grades": "All",
+      "time": "10:00"
+    }
+  ],
   "operating_times": {
     "school_hours": "0800h - 1500h",
     "earliest_drop_off": "0645h",
@@ -176,7 +408,7 @@
       "detailed_answer": "We also have branches at *14 Alexandra Drive, Hatfield*, *1 Mudimu Village, Ziko, Chitungwiza*, and *142 Kilwinning Road, Hatfield*."
     },
     "when_do_schools_open": {
-      "short_answer": "📅 Schools open *9 Sept 2025* and close *4 Dec 2025*.",
+      "short_answer": "📅 Term 1 2026 opens *12 Jan 2026* and closes *3 Apr 2026*.",
       "detailed_answer": "Classes run from 0800h - 1500h daily, earliest drop at 0645h, latest pickup 1545h."
     },
     "how_to_apply": {

@@ -46,6 +46,22 @@ class Config:
         "2026-3": datetime(2026, 12, 3, tzinfo=timezone.utc),
     }
 
+    TRANSPORT_ROUTES = {
+        "local": {
+            "2_way": {"price": 180, "fee_type": "Transport Local 2 Way"},
+            "1_way": {"price": 100, "fee_type": "Transport Local 1 Way"}
+        },
+        "chitungwiza": {
+            "2_way": {"price": 200, "fee_type": "Transport Chitungwiza 2 Way"},
+            "1_way": {"price": 100, "fee_type": "Transport Chitungwiza 1 Way"}
+        },
+        "cbd": {
+            "either_way": {"price": 200, "fee_type": "Transport CBD"}
+        }
+    }
+
+    TRANSPORT_S3_BUCKET = "shining-smiles-transport-passes"
+
     @classmethod
     def get_current_term(cls):
         """Returns the currently active term based on today's date, or None if between terms."""

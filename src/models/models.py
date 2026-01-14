@@ -42,6 +42,22 @@ class VerificationCode(Base):
     code = Column(String, primary_key=True)
     phone_number = Column(String)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+class TransportPass(Base):
+    __tablename__ = 'transport_passes'
+    pass_id = Column(String, primary_key=True)  # UUID
+    student_id = Column(String, nullable=False)
+    term = Column(String, nullable=False)  # e.g., "Term 1 - 2026"
+    route_type = Column(String, nullable=False)  # e.g., "local", "chitungwiza", "cbd"
+    service_type = Column(String, nullable=False)  # "2_way", "1_way", "either_way"
+    amount_paid = Column(Float, nullable=False)  # Amount paid for transport
+    issued_date = Column(DateTime, nullable=False)
+    expiry_date = Column(DateTime, nullable=False)  # End of term
+    whatsapp_number = Column(String)
+    pdf_path = Column(String)  # S3 path
+    qr_path = Column(String)  # S3 path for QR code
+    status = Column(String, default='active')  # 'active', 'expired', 'revoked'
+    last_updated = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     used = Column(Boolean, default=False)
 
 class FailedSync(Base):
