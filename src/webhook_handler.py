@@ -159,6 +159,15 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
     contacts = session.query(StudentContact).filter((StudentContact.student_mobile == whatsapp_number) |
                                                     (StudentContact.guardian_mobile_number == whatsapp_number) |
                                                     (StudentContact.preferred_phone_number == whatsapp_number)).all()
+    
+    # BUGFIX: If contacts exist but user_state is "unregistered_menu", reset to "main_menu"
+    # This prevents registered users from being shown unregistered menu
+    if contacts and user_state.state == "unregistered_menu":
+        logger.warning(f"Registered user {whatsapp_number} had corrupted state 'unregistered_menu', resetting to 'main_menu'", extra=extra_log)
+        user_state.state = "main_menu"
+        user_state.last_updated = current_time
+        session.commit()
+    
     if not contacts:
         extra_log["student_id"] = None
         if message_body == "menu":
@@ -204,7 +213,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
         elif message_body in ["5", "help"]:
             return (
                 f"❓ *Help*: Ask me anything about Shining Smiles School or reply *menu* for options. "
-                f"For account-related queries, contact _admin@shiningsmilescollege.ac.zw_.\n{unregistered_menu_text}"
+                f"For account-related queries, contact _admin@shiningsmilescollege.ac.zw_.\\n{unregistered_menu_text}"
             )
 
         else:
@@ -287,6 +296,14 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                 f"*{student_id} ({student_name})*: Fully paid ✅\n"
                                 f"  Total Fees: ${total_fees:.2f}\n"
                                 f"  Total Paid: ${total_paid:.2f}"
+                            )
+                        elif balance < 0:
+                            # Overpayment / Credit
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*:\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}\n"
+                                f"  Credit: ${abs(balance):.2f} 💰"
                             )
                         else:
                             balance_texts.append(
@@ -374,19 +391,19 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                 if billed_fees.get("data", {}).get("bills")
                                 else "No fees recorded."
                             )
+                            # Determine balance label
+                            if balance > 0:
+                                balance_label = f"*Balance Owed*: ${balance:.2f}"
+                            elif balance < 0:
+                                balance_label = f"*Credit/Overpayment*: ${abs(balance):.2f}"
+                            else:
+                                balance_label = "*Status*: ✅ *Fully Paid*"
+                            
                             statement_text = (
                                 f"*Account Statement for {student_id} ({student_name}, Term {default_term})*:\n"
                                 f"*Total Fees*: ${total_fees:.2f}\n"
                                 f"*Total Paid*: ${total_paid:.2f}\n"
-                                f"*Balance Owed*: ${balance:.2f}\n"
-                                f"*Fees Charged*:\n{fee_details}\n"
-                                f"*Payments*:\n{payment_details}"
-                            ) if balance != 0.0 or total_fees <= 0.0 else (
-                                f"*Account Statement for {student_id} ({student_name}, Term {default_term})*:\n"
-                                f"*Great news!* Balance is *fully paid*.\n"
-                                f"*Total Fees*: ${total_fees:.2f}\n"
-                                f"*Total Paid*: ${total_paid:.2f}\n"
-                                f"*Balance Owed*: ${balance:.2f}\n"
+                                f"{balance_label}\n"
                                 f"*Fees Charged*:\n{fee_details}\n"
                                 f"*Payments*:\n{payment_details}"
                             )

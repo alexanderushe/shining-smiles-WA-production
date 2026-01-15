@@ -425,10 +425,12 @@ def create_invoice_pdf(invoice_data, output_path, extra_log):
             pdf.cell(70, 8, f"  {item['description']}", 1, 0, "L")
             pdf.cell(35, 8, f"${item['amount_billed']:.2f}", 1, 0, "R")
             pdf.cell(35, 8, f"${item['amount_paid']:.2f}", 1, 0, "R")
-            # Highlight balance if outstanding
+            # Color code the balance
             if item['balance'] > 0:
-                pdf.set_text_color(200, 0, 0)  # Red for outstanding balance
-            pdf.cell(40, 8, f"${item['balance']:.2f}", 1, 1, "R")
+                pdf.set_text_color(200, 0, 0)  # Red for outstanding
+            elif item['balance'] < 0:
+                pdf.set_text_color(0, 150, 0)  # Green for credit
+            pdf.cell(40, 8, f"${abs(item['balance']):.2f}", 1, 1, "R")
             pdf.set_text_color(0, 0, 0)  # Reset to black
         
         # TOTAL ROWS
@@ -445,12 +447,20 @@ def create_invoice_pdf(invoice_data, output_path, extra_log):
         pdf.cell(35, 8, f"${invoice_data['total_paid']:.2f}", 1, 0, "R")
         pdf.cell(40, 8, "", 1, 1)  # Empty cell
         
-        # Outstanding Balance
-        pdf.cell(70, 8, "OUTSTANDING BALANCE:", 1, 0, "R")
-        pdf.cell(70, 8, "", 1, 0)  # Empty cells
+        # Balance Label (Outstanding/Credit/Paid)
         if invoice_data['total_balance'] > 0:
-            pdf.set_text_color(200, 0, 0)  # Red for outstanding
-        pdf.cell(40, 8, f"${invoice_data['total_balance']:.2f}", 1, 1, "R")
+            balance_label = "OUTSTANDING BALANCE:"
+            pdf.set_text_color(200, 0, 0)  # Red
+        elif invoice_data['total_balance'] < 0:
+            balance_label = "CREDIT:"
+            pdf.set_text_color(0, 150, 0)  # Green
+        else:
+            balance_label = "BALANCE:"
+            pdf.set_text_color(0, 0, 0)  # Black
+        
+        pdf.cell(70, 8, balance_label, 1, 0, "R")
+        pdf.cell(70, 8, "", 1, 0)  # Empty cells
+        pdf.cell(40, 8, f"${abs(invoice_data['total_balance']):.2f}", 1, 1, "R")
         pdf.set_text_color(0, 0, 0)  # Reset to black
 
         

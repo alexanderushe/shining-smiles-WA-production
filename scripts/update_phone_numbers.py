@@ -17,24 +17,26 @@ def lambda_handler(event, context):
     results = []
     
     with engine.connect() as conn:
-        # Query SSC20246303 (Thando Mujeni) before update
+        # Query SSC20258052 before update
         query_result = conn.execute(text("""
             SELECT student_id, firstname, lastname, guardian_mobile_number, preferred_phone_number
             FROM student_contacts 
-            WHERE student_id = 'SSC20246303'
+            WHERE student_id = 'SSC20258052'
         """))
         results.append("=== BEFORE UPDATE ===")
         for row in query_result:
-            results.append(f"SSC20246303: {row}")
+            results.append(f"SSC20258052: {row}")
         
-        # Update SSC20246303 - Thando Mujeni with +263711206287
+        # Update SSC20258052 with +263711206287 (all phone fields)
         conn.execute(text("""
             UPDATE student_contacts 
             SET preferred_phone_number = '+263711206287',
-                guardian_mobile_number = '+263711206287'
-            WHERE student_id = 'SSC20246303'
+                guardian_mobile_number = '+263711206287',
+                student_mobile = '+263711206287',
+                last_updated = CURRENT_TIMESTAMP
+            WHERE student_id = 'SSC20258052'
         """))
-        results.append("✅ SSC20246303 (Thando Mujeni) updated with +263711206287")
+        results.append("✅ SSC20258052 updated with +263711206287")
         
         conn.commit()
         
@@ -42,11 +44,11 @@ def lambda_handler(event, context):
         query_result = conn.execute(text("""
             SELECT student_id, firstname, lastname, guardian_mobile_number, preferred_phone_number
             FROM student_contacts 
-            WHERE student_id = 'SSC20246303'
+            WHERE student_id = 'SSC20258052'
         """))
         results.append("=== AFTER UPDATE ===")
         for row in query_result:
-            results.append(f"SSC20246303: {row}")
+            results.append(f"SSC20258052: {row}")
     
     return {
         'statusCode': 200,
