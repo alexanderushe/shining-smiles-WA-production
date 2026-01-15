@@ -65,4 +65,5 @@ presentation_bot_summary.md
 presentation_bot_summary.pdf
 
 # Keep important config files (remove from ignore if needed)
-# !samconfig.toml  # Uncomment to track SAM configdocker-package/
+# !samconfig.toml  # Uncomment to track SAM config
+docker-package/

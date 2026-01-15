@@ -110,6 +110,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
         "➊ *View Balance*\n"
         "➋ *Request Statement*\n"
         "➌ *Get Gate Pass*\n"
+        "➍ *Transport Pass* 🚌\n"
     )
     unregistered_menu_text = (
         "Reply with a number or keyword:\n"
@@ -848,6 +849,203 @@ def whatsapp_menu():
                     response_message = response.message(
                         f"⚠️ *Hi {fullname},*\n"
                         f"*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                    )
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                    session.close()
+                    return Response(str(response), mimetype="application/xml")
+
+            elif message_body in ["4", "transport pass", "get transport pass", "transport"]:
+                try:
+                    logger.debug(f"Attempting transport passes for student_ids: {student_ids}, term: {default_term}", extra=extra_log)
+                    
+                    # Check if in active term
+                    current_date = current_time.date()
+                    default_term = next(
+                        (term for term, start in config.TERM_START_DATES.items() if start.date() <= current_date <=config.TERM_END_DATES[term].date()),
+                        None
+                    )
+                    
+                    if not default_term:
+                        next_term = min(
+                            (term for term, start in config.TERM_START_DATES.items() if start.date() > current_date),
+                            key=lambda t: config.TERM_START_DATES[t].date(),
+                            default=None
+                        )
+                        next_term_date = config.TERM_START_DATES[next_term].date().strftime("%d %B %Y") if next_term else "a future date"
+                        response_message = response.message(
+                            f"📅 *Hi {fullname},*\\n"
+                            f"Transport passes are only issued during active school terms. Schools reopen on {next_term_date} for Term {next_term or ''}. Please try again then.\\n{menu_text}"
+                        )
+                        logger.info(f"Sending holiday response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                        user_state.state = "main_menu"
+                        user_state.last_updated = current_time
+                        session.commit()
+                        session.close()
+                        return Response(str(response), mimetype="application/xml")
+                    
+                    transport_pass_results = []
+                    
+                    for student_id in student_ids:
+                        # Fetch billed fees to check for transport fees
+                        billed_fees = sms_client.get_student_billed_fees(student_id, default_term)
+                        bills = billed_fees.get("data", {}).get("bills", [])
+                        
+                        # Filter for transport fees
+                        transport_fees = [bill for bill in bills if "transport" in bill.get("fee_type", "").lower()]
+                        
+                        student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                        
+                        if not transport_fees:
+                            transport_pass_results.append({
+                                "student_id": student_id,
+                                "student_name": student_name,
+                                "status": "no_fees",
+                                "message": f"*{student_id} ({student_name})*:\\n❌ No transport fees found for Term {default_term}.\\nContact _admin@shiningsmilescollege.ac.zw_ if this is incorrect."
+                            })
+                            continue
+                        
+                        # Process each transport fee
+                        student_passes = []
+                        student_partial = []
+                        
+                        for fee in transport_fees:
+                            fee_type = fee.get("fee_type", "")
+                            amount = float(fee.get("amount", 0))
+                            
+                            # Parse and validate fee
+                            from services.transport_pass_service import parse_and_validate_transport_fee
+                            parsed = parse_and_validate_transport_fee(fee_type, amount)
+                            
+                            if not parsed:
+                                logger.warning(f"Unknown transport fee type: {fee_type}", extra=extra_log)
+                                continue
+                            
+                            route_type, service_type, is_fully_paid, expected_amount = parsed
+                            
+                            if not is_fully_paid:
+                                # Partial payment
+                                outstanding = expected_amount - amount
+                                route_display = route_type.capitalize()
+                                service_display = service_type.replace("_", " ").title()
+                                student_partial.append(
+                                    f"⚠️ {route_display} - {service_display}:\\n"
+                                    f"   Paid: ${amount:.2f} of ${expected_amount:.2f}\\n"
+                                    f"   Outstanding: ${outstanding:.2f}"
+                                )
+                                continue
+                            
+                            # Generate transport pass
+                            transport_url = f"{config.APP_BASE_URL}/generate-transport-pass"
+                            payload = {
+                                "student_id": student_id,
+                                "term": default_term,
+                                "route_type": route_type,
+                                "service_type": service_type,
+                                "amount_paid": amount,
+                                "whatsapp_number": whatsapp_number,
+                                "skip_whatsapp": False
+                            }
+                            
+                            transport_res = requests.post(transport_url, json=payload, timeout=10)
+                            logger.debug(f"[TransportPass Response] {student_id} - {transport_res.status_code} - {transport_res.text}", extra=extra_log)
+                            
+                            data = transport_res.json()
+                            
+                            if transport_res.status_code == 200:
+                                route_display = route_type.capitalize()
+                                service_display = service_type.replace("_", " ").title()
+                                student_passes.append(
+                                    f"✅ {route_display} - {service_display} (${amount:.2f})\\n"
+                                    f"   Pass issued! Valid until {data.get('expiry_date', 'N/A')}"
+                                )
+                            elif transport_res.status_code == 402:  # Partial payment
+                                route_display = route_type.capitalize()
+                                service_display = service_type.replace("_", " ").title()
+                                student_partial.append(
+                                    f"⚠️ {route_display} - {service_display}:\\n"
+                                    f"   Paid: ${data.get('paid', 0):.2f} of ${data.get('required', 0):.2f}\\n"
+                                    f"   Outstanding: ${data.get('outstanding', 0):.2f}"
+                                )
+                            else:
+                                error_msg = data.get("error", "Unknown error")
+                                logger.error(f"Failed to generate transport pass for {student_id}: {error_msg}", extra=extra_log)
+                        
+                        # Build student result
+                        if student_passes or student_partial:
+                            result_text = f"*{student_id} ({student_name})*:\\n"
+                            if student_passes:
+                                result_text += "\\n".join(student_passes)
+                            if student_partial:
+                                if student_passes:
+                                    result_text += "\\n\\n"
+                                result_text += "\\n".join(student_partial)
+                            
+                            transport_pass_results.append({
+                                "student_id": student_id,
+                                "student_name": student_name,
+                                "status": "processed",
+                                "message": result_text
+                            })
+                        else:
+                            transport_pass_results.append({
+                                "student_id": student_id,
+                                "student_name": student_name,
+                                "status": "error",
+                                "message": f"*{student_id} ({student_name})*:\\n❌ Unable to process transport fees."
+                            })
+                    
+                    # Build final response
+                    if not transport_pass_results:
+                        response_text = (
+                            f"*Hi {fullname},*\\n"
+                            f"⚠️ No transport passes could be generated.\\n\\n"
+                            f"Contact _admin@shiningsmilescollege.ac.zw_ for assistance.\\n{menu_text}"
+                        )
+                    else:
+                        # Check if any passes were actually issued
+                        has_passes = any(r["status"] == "processed" for r in transport_pass_results)
+                        
+                        if has_passes:
+                            header = "🚌 *Transport Pass Status:*\\n\\n"
+                        else:
+                            header = "📋 *Transport Status:*\\n\\n"
+                        
+                        result_messages = [r["message"] for r in transport_pass_results]
+                        response_text = (
+                            f"*Hi {fullname},*\\n"
+                            f"{header}"
+                            f"\\n\\n".join(result_messages) +
+                            f"\\n\\n📄 Check your WhatsApp for issued pass PDFs.\\n"
+                            f"Contact _admin@shiningsmilescollege.ac.zw_ if you need assistance.\\n{menu_text}"
+                        )
+                    
+                    response_message = response.message(response_text)
+                    logger.info(f"Sending transport pass response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    session.close()
+                    return Response(str(response), mimetype="application/xml")
+                    
+                except RateLimitException:
+                    logger.warning(f"Rate limit hit while fetching transport pass data for {student_ids}, term {default_term}", extra=extra_log)
+                    response_message = response.message(
+                        f"⚠️ *Hi {fullname},*\\n*Too many requests.* Please try again shortly.\\n{menu_text}"
+                    )
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                    session.close()
+                    return Response(str(response), mimetype="application/xml")
+                except Exception as e:
+                    logger.error(f"Unexpected error in transport pass generation for {student_ids}, term {default_term}: {str(e)}\\n{traceback.format_exc()}", extra=extra_log)
+                    response_message = response.message(
+                        f"⚠️ *Hi {fullname},*\\n"
+                        f"*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\\n{menu_text}"
                     )
                     user_state.state = "main_menu"
                     user_state.last_updated = current_time

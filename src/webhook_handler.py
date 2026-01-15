@@ -73,6 +73,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
         "➋ *Request Statement*\n"
         "➌ *Get Gate Pass*\n"
         "➍ *Request Invoice*\n"
+        "➎ *Transport Pass* 🚌\n"
         "──────────────\n"
         "_Reply 'menu' anytime to see options_"
     )
@@ -656,11 +657,13 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                 )
                                 send_whatsapp_message(whatsapp_number, message)
                                 
-                                # Send PDF
+                                # Send PDF with proper caption and filename
+                                invoice_caption = f"Invoice for {student_name} - Term {term}"
                                 send_whatsapp_message(
                                     whatsapp_number,
-                                    data['pdf_url'],
-                                    media_url=data['pdf_url']
+                                    invoice_caption,
+                                    media_url=data['pdf_url'],
+                                    filename=f"Invoice_{data['invoice_number']}.pdf"
                                 )
                                 
                                 success_messages.append(f"✅ {student_name} ({result['student_id']}) - Invoice {data['invoice_number']}")
@@ -692,6 +695,178 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                     return f"⚠️ *Hi {fullname},*\n*Invoice service temporarily unavailable.* Please try again later or contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
                 except Exception as e:
                     logger.error(f"Unexpected error in invoice generation flow: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    return f"⚠️ *Hi {fullname},*\n*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+
+            elif message_body in ["5", "transport pass", "get transport pass", "transport"]:
+                # Transport Pass Handler
+                try:
+                    logger.debug(f"Attempting transport passes for student_ids: {student_ids}, term: {default_term}", extra=extra_log)
+                    
+                    # Check if in active term
+                    if not default_term:
+                        next_term = min(
+                            (term for term, start in config.TERM_START_DATES.items() if start.date() > current_date),
+                            key=lambda t: config.TERM_START_DATES[t].date(),
+                            default=None
+                        )
+                        next_term_date = config.TERM_START_DATES[next_term].date().strftime("%d %B %Y") if next_term else "a future date"
+                        user_state.state = "main_menu"
+                        user_state.last_updated = current_time
+                        session.commit()
+                        return f"📅 *Hi {fullname},*\nTransport passes are only issued during active school terms. Schools reopen on {next_term_date} for Term {next_term or ''}. Please try again then.\n{menu_text}"
+                    
+                    from services.transport_pass_service import parse_and_validate_transport_fee, generate_transport_pass
+                    
+                    transport_pass_results = []
+                    
+                    for student_id in student_ids:
+                        # Fetch billed fees to check for transport fees
+                        billed_fees = sms_client.get_student_billed_fees(student_id, default_term)
+                        bills = billed_fees.get("data", {}).get("bills", [])
+                        
+                        # Filter for transport fees
+                        transport_fees = [bill for bill in bills if "transport" in bill.get("fee_type", "").lower()]
+                        
+                        student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
+                        
+                        if not transport_fees:
+                            transport_pass_results.append({
+                                "student_id": student_id,
+                                "student_name": student_name,
+                                "status": "no_fees",
+                                "message": f"*{student_id} ({student_name})*:\n❌ No transport fees found for Term {default_term}.\nContact _admin@shiningsmilescollege.ac.zw_ if this is incorrect."
+                            })
+                            continue
+                        
+                        # Process each transport fee
+                        student_passes = []
+                        student_partial = []
+                        
+                        for fee in transport_fees:
+                            fee_type = fee.get("fee_type", "")
+                            amount = float(fee.get("amount", 0))
+                            
+                            # Parse and validate fee
+                            parsed = parse_and_validate_transport_fee(fee_type, amount)
+                            
+                            if not parsed:
+                                logger.warning(f"Unknown transport fee type: {fee_type}", extra=extra_log)
+                                continue
+                            
+                            route_type, service_type, is_fully_paid, expected_amount = parsed
+                            
+                            if not is_fully_paid:
+                                # Partial payment
+                                outstanding = expected_amount - amount
+                                route_display = route_type.capitalize()
+                                service_display = service_type.replace("_", " ").title()
+                                student_partial.append(
+                                    f"⚠️ {route_display} - {service_display}:\n"
+                                    f"   Paid: ${amount:.2f} of ${expected_amount:.2f}\n"
+                                    f"   Outstanding: ${outstanding:.2f}"
+                                )
+                                continue
+                            
+                            # Generate transport pass via service
+                            try:
+                                result, status_code = generate_transport_pass(
+                                    student_id=student_id,
+                                    term=default_term,
+                                    route_type=route_type,
+                                    service_type=service_type,
+                                    amount_paid=amount,
+                                    whatsapp_number=whatsapp_number,
+                                    skip_whatsapp=False
+                                )
+                                
+                                logger.debug(f"[TransportPass Response] {student_id} - {status_code} - {result}", extra=extra_log)
+                                
+                                if status_code == 200:
+                                    route_display = route_type.capitalize()
+                                    service_display = service_type.replace("_", " ").title()
+                                    student_passes.append(
+                                        f"✅ {route_display} - {service_display} (${amount:.2f})\n"
+                                        f"   Pass issued! Valid until {result.get('expiry_date', 'N/A')}"
+                                    )
+                                elif status_code == 402:  # Partial payment
+                                    route_display = route_type.capitalize()
+                                    service_display = service_type.replace("_", " ").title()
+                                    student_partial.append(
+                                        f"⚠️ {route_display} - {service_display}:\n"
+                                        f"   Paid: ${result.get('paid', 0):.2f} of ${result.get('required', 0):.2f}\n"
+                                        f"   Outstanding: ${result.get('outstanding', 0):.2f}"
+                                    )
+                                else:
+                                    error_msg = result.get("error", "Unknown error") if isinstance(result, dict) else "Unknown error"
+                                    logger.error(f"Failed to generate transport pass for {student_id}: {error_msg}", extra=extra_log)
+                            except Exception as e:
+                                logger.error(f"Transport pass service error for {student_id}: {str(e)}", extra=extra_log)
+                        
+                        # Build student result
+                        if student_passes or student_partial:
+                            result_text = f"*{student_id} ({student_name})*:\n"
+                            if student_passes:
+                                result_text += "\n".join(student_passes)
+                            if student_partial:
+                                if student_passes:
+                                    result_text += "\n\n"
+                                result_text += "\n".join(student_partial)
+                            
+                            transport_pass_results.append({
+                                "student_id": student_id,
+                                "student_name": student_name,
+                                "status": "processed",
+                                "message": result_text
+                            })
+                        else:
+                            transport_pass_results.append({
+                                "student_id": student_id,
+                                "student_name": student_name,
+                                "status": "error",
+                                "message": f"*{student_id} ({student_name})*:\n❌ Unable to process transport fees."
+                            })
+                    
+                    # Build final response
+                    if not transport_pass_results:
+                        response_text = (
+                            f"*Hi {fullname},*\n"
+                            f"⚠️ No transport passes could be generated.\n\n"
+                            f"Contact _admin@shiningsmilescollege.ac.zw_ for assistance.\n{menu_text}"
+                        )
+                    else:
+                        # Check if any passes were actually issued
+                        has_passes = any(r["status"] == "processed" for r in transport_pass_results)
+                        
+                        if has_passes:
+                            header = "🚌 *Transport Pass Status:*\n\n"
+                        else:
+                            header = "📋 *Transport Status:*\n\n"
+                        
+                        result_messages = [r["message"] for r in transport_pass_results]
+                        response_text = (
+                            f"*Hi {fullname},*\n"
+                            f"{header}" +
+                            "\n\n".join(result_messages) +
+                            f"\n\n📄 Check your WhatsApp for issued pass PDFs.\n"
+                            f"Contact _admin@shiningsmilescollege.ac.zw_ if you need assistance.\n{menu_text}"
+                        )
+                    
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    return response_text
+                    
+                except ImportError as e:
+                    logger.error(f"Failed to import transport_pass_service: {str(e)}", extra=extra_log)
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    return f"⚠️ *Hi {fullname},*\n*Transport pass service temporarily unavailable.* Please try again later or contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                except Exception as e:
+                    logger.error(f"Unexpected error in transport pass generation for {student_ids}, term {default_term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     user_state.state = "main_menu"
                     user_state.last_updated = current_time
                     session.commit()
@@ -1266,87 +1441,6 @@ def send_whatsapp_message_real(to: str, message: str):
 def lambda_handler(event, context):
     print("🎯 DEBUG: Lambda handler started")
     print("🎯 DEBUG: Event keys:", list(event.keys()))
-    
-    # Handle admin database update action
-    if event.get("action") == "admin_update_phones":
-        print("🔧 ADMIN: Updating phone numbers")
-        try:
-            from utils.database import init_db
-            from sqlalchemy import text
-            session = init_db()
-            engine = session.get_bind()
-            
-            results = []
-            
-            with engine.connect() as conn:
-                # First, check if SSC20257986 exists
-                check_result = conn.execute(text("""
-                    SELECT student_id, firstname, lastname 
-                    FROM student_contacts 
-                    WHERE student_id = 'SSC20246303'
-                """))
-                exists = list(check_result)
-                if not exists:
-                    results.append("⚠️ SSC20246303 NOT FOUND in database!")
-                    results.append("Searching for any student with +263711206287...")
-                    
-                    # Find who has this number
-                    search_result = conn.execute(text("""
-                        SELECT student_id, firstname, lastname, guardian_mobile_number, preferred_phone_number
-                        FROM student_contacts 
-                        WHERE guardian_mobile_number LIKE '%711206287%' 
-                           OR preferred_phone_number LIKE '%711206287%'
-                        LIMIT 10
-                    """))
-                    for row in search_result:
-                        results.append(str(dict(row._mapping)))
-                else:
-                    results.append(f"✅ Found: {exists[0]}")
-                
-                # Query both students first
-                query_result = conn.execute(text("""
-                    SELECT student_id, firstname, lastname, guardian_mobile_number, preferred_phone_number
-                    FROM student_contacts 
-                    WHERE student_id IN ('SSC20257279', 'SSC20246303')
-                """))
-                results.append("=== BEFORE UPDATE ===")
-                for row in query_result:
-                    results.append(str(dict(row._mapping)))
-                
-                # Update SSC20257986 - add +263711206287
-                conn.execute(text("""
-                    UPDATE student_contacts 
-                    SET preferred_phone_number = '+263711206287',
-                        guardian_mobile_number = '+263711206287'
-                    WHERE student_id = 'SSC20246303'
-                """))
-                results.append("✅ SSC20246303 updated with +263711206287")
-                
-                # Update SSC20257279 - remove +263711206287  
-                conn.execute(text("""
-                    UPDATE student_contacts 
-                    SET preferred_phone_number = NULL,
-                        guardian_mobile_number = NULL
-                    WHERE student_id = 'SSC20257279'
-                """))
-                results.append("✅ SSC20257279 cleared")
-                
-                conn.commit()
-                
-                # Verify changes
-                query_result = conn.execute(text("""
-                    SELECT student_id, firstname, lastname, guardian_mobile_number, preferred_phone_number
-                    FROM student_contacts 
-                    WHERE student_id IN ('SSC20257279', 'SSC20246303')
-                """))
-                results.append("=== AFTER UPDATE ===")
-                for row in query_result:
-                    results.append(str(dict(row._mapping)))
-            
-            session.remove()
-            return {"statusCode": 200, "body": json.dumps(results, indent=2)}
-        except Exception as e:
-            return {"statusCode": 500, "body": f"Error: {str(e)}"}
     
     # Check for Scheduled Event (EventBridge)
     if event.get("source") == "aws.events":

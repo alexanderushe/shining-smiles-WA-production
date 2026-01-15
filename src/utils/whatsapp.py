@@ -15,7 +15,7 @@ def sanitize_phone_number(number):
     """Remove spaces and invisible characters from phone number."""
     return re.sub(r"\s+", "", number)
 
-def send_whatsapp_message(to, message, media_url=None, max_attempts=3, delay=2, use_cloud_api=True):
+def send_whatsapp_message(to, message, media_url=None, max_attempts=3, delay=2, use_cloud_api=True, filename="GatePass.pdf"):
     """
     Send a WhatsApp message using WhatsApp Cloud API.
     """
@@ -47,7 +47,7 @@ def send_whatsapp_message(to, message, media_url=None, max_attempts=3, delay=2, 
         # Check if it's a PDF (simple heuristic for pre-signed URLs)
         if ".pdf" in media_url.lower():
             payload["type"] = "document"
-            payload["document"] = {"link": media_url, "caption": message, "filename": "GatePass.pdf"}
+            payload["document"] = {"link": media_url, "caption": message, "filename": filename}
         else:
             payload["type"] = "image"
             payload["image"] = {"link": media_url, "caption": message}

@@ -98,6 +98,23 @@ class Invoice(Base):
     pdf_path = Column(String(255))
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
+class TransportPass(Base):
+    __tablename__ = 'transport_passes'
+    id = Column(Integer, primary_key=True)
+    pass_id = Column(String, unique=True, nullable=False)  # UUID
+    student_id = Column(String, ForeignKey("student_contacts.student_id"), nullable=False)
+    term = Column(String, nullable=False)  # e.g., "Term 1 - 2026"
+    route_type = Column(String, nullable=False)  # e.g., "local", "chitungwiza", "cbd"
+    service_type = Column(String, nullable=False)  # "2_way", "1_way", "either_way"
+    amount_paid = Column(Float, nullable=False)  # Amount paid for transport
+    issued_date = Column(DateTime(timezone=True), nullable=False)
+    expiry_date = Column(DateTime(timezone=True), nullable=False)  # End of term
+    whatsapp_number = Column(String)
+    pdf_path = Column(String)  # S3 path
+    qr_path = Column(String)  # S3 path for QR code
+    status = Column(String, default='active')  # 'active', 'expired', 'revoked'
+    last_updated = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
+
 def get_secret(secret_name):
     """Retrieve secret from AWS Secrets Manager with fallback to env var."""
     import signal

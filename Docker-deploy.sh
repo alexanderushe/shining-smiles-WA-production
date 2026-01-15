@@ -22,14 +22,15 @@ docker run --rm \
         mkdir -p docker-package
         cp -r src/* docker-package/
         cp -r static docker-package/
-cp -r templates docker-package/
+        cp -r templates docker-package/
+        cp -r scripts docker-package/
         cd docker-package
+        pip install --upgrade pip setuptools
         pip install \
             openai==1.51.2 \
             pydantic==2.9.2 \
             sqlalchemy==2.0.31 \
             pg8000==1.31.2 \
-            requests==2.32.3 \
             requests==2.32.3 \
             ratelimit==2.2.1 \
             fpdf2==2.7.9 \
@@ -37,7 +38,9 @@ cp -r templates docker-package/
             pillow==11.2.1 \
             flask==3.0.3 \
             twilio==9.3.2 \
-            -t . --no-cache-dir
+            -t . --no-cache-dir \
+            --default-timeout=100 \
+            --retries=5
         echo '=== Verifying installed packages ==='
         ls -la | grep -E '(fpdf|segno|pillow|requests)' || echo 'No packages found!'
     "
@@ -69,11 +72,17 @@ aws lambda update-function-configuration \
 echo "⏳ Waiting for configuration update..."
 aws lambda wait function-updated --function-name $FUNCTION_NAME --region $REGION
 
-echo "🚀 Deploying to Lambda..."
+echo "🚀 Uploading to S3..."
+aws s3 cp final-deployment.zip s3://shining-smiles-invoices/deployment/final-deployment.zip
+
+echo "🚀 Deploying from S3..."
 aws lambda update-function-code \
     --function-name $FUNCTION_NAME \
-    --zip-file fileb://final-deployment.zip \
-    --region $REGION
+    --s3-bucket shining-smiles-invoices \
+    --s3-key deployment/final-deployment.zip \
+    --region $REGION \
+    --cli-connect-timeout 600 \
+    --cli-read-timeout 600
 
 aws lambda wait function-updated --function-name $FUNCTION_NAME --region $REGION
 
