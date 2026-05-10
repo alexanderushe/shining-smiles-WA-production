@@ -610,9 +610,12 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                     return f"⚠️ *Hi {fullname},*\n*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
 
             elif message_body in ["4", "invoice", "request invoice"]:
-                # Auto-detect current term
-                term = config.get_current_term() or config.get_most_recent_completed_term()
-                
+                # Between terms: invoice for the upcoming term; otherwise current term
+                if config.is_between_terms():
+                    term = config.get_next_term() or config.get_most_recent_completed_term()
+                else:
+                    term = config.get_current_term()
+
                 if not term:
                     user_state.state = "main_menu"
                     user_state.last_updated = current_time
@@ -717,19 +720,15 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                 # Transport Pass Handler
                 try:
                     logger.debug(f"Attempting transport passes for student_ids: {student_ids}, term: {default_term}", extra=extra_log)
-                    
+
                     # Check if in active term
-                    if not default_term:
-                        next_term = min(
-                            (term for term, start in config.TERM_START_DATES.items() if start.date() > current_date),
-                            key=lambda t: config.TERM_START_DATES[t].date(),
-                            default=None
-                        )
+                    if config.is_between_terms():
+                        next_term = config.get_next_term()
                         next_term_date = config.TERM_START_DATES[next_term].date().strftime("%d %B %Y") if next_term else "a future date"
                         user_state.state = "main_menu"
                         user_state.last_updated = current_time
                         session.commit()
-                        return f"📅 *Hi {fullname},*\nTransport passes are only issued during active school terms. Schools reopen on {next_term_date} for Term {next_term or ''}. Please try again then.\n{menu_text}"
+                        return f"📅 *Hi {fullname},*\nTransport passes are only issued during active school terms. Schools reopen on {next_term_date} for Term {next_term or '2'}. Please try again then.\n{menu_text}"
                     
                     from services.transport_pass_service import parse_and_validate_transport_fee, generate_transport_pass
                     
