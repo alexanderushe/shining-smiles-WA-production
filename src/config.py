@@ -32,7 +32,7 @@ class Config:
         # 2026 terms (current academic year)
         # Note: Term 2026-1 starts Jan 4 to allow early fee payments before school opens
         "2026-1": datetime(2026, 1, 4, tzinfo=timezone.utc),
-        "2026-2": datetime(2026, 5, 4, tzinfo=timezone.utc),
+        "2026-2": datetime(2026, 5, 11, tzinfo=timezone.utc),
         "2026-3": datetime(2026, 9, 7, tzinfo=timezone.utc),
     }
     TERM_END_DATES = {

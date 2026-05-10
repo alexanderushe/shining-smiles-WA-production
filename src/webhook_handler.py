@@ -317,13 +317,13 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                         response_text = (
                             f"📊 *Hi {fullname},*\n{prefix_message}"
                             f"No fees recorded for any students in term *{term}*. Please contact _admin@shiningsmilescollege.ac.zw_.\n\n"
-                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\n{menu_text}"
                         )
                     else:
                         response_text = (
                             f"📊 *Hi {fullname},*\n{prefix_message}\n" +
                             "\n\n".join(balance_texts) + 
-                            f"\n\n💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                            f"\n\n💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\n{menu_text}"
                         )
                     
                     user_state.state = "main_menu"
@@ -344,14 +344,14 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                         user_state.state = "awaiting_term_statement"
                         user_state.last_updated = current_time
                         session.commit()
-                        return f"📊 *Hi {fullname},*\nPlease reply with a valid term (e.g., *2025-1*, *2025-2*, *2025-3*) for all students.\n{menu_text}"
+                        return f"📊 *Hi {fullname},*\nPlease reply with a valid term (e.g., *2026-2*, *2026-1*) for all students.\n{menu_text}"
 
                     term_start = config.TERM_START_DATES.get(default_term)
                     if term_start and term_start.date() > current_date:
                         user_state.state = "main_menu"
                         user_state.last_updated = current_time
                         session.commit()
-                        return f"📅 *Hi {fullname},*\nTerm *{default_term}* has not started yet. Please select a current or past term (e.g., *2025-1*, *2025-2*) for all students.\n{menu_text}"
+                        return f"📅 *Hi {fullname},*\nTerm *{default_term}* has not started yet. Please select a current or past term (e.g., *2026-2*, *2026-1*) for all students.\n{menu_text}"
 
                     statement_texts = []
                     max_message_length = 4000  # Higher limit for WhatsApp
@@ -417,13 +417,13 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                         user_state.state = "awaiting_term_statement"
                         user_state.last_updated = current_time
                         session.commit()
-                        return f"📊 *Hi {fullname},*\nNo account statements found for any students in term *{default_term}*.\n\n💡 View other terms? Reply with term code (e.g., *2025-1*, *2025-3*)\nOr reply *menu* for main options."
+                        return f"📊 *Hi {fullname},*\nNo account statements found for any students in term *{default_term}*.\n\n💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\nOr reply *menu* for main options."
                     else:
                         combined_text = f"Account statement for term {default_term}:\n\n" + "\n\n".join(statement_texts)
                         if len(combined_text) > max_message_length:
-                            combined_text = combined_text[:max_message_length] + "\n\n💡 View other terms? Reply with term code (e.g., *2025-1*, *2025-3*)\n_Reply 'menu' for more options._"
+                            combined_text = combined_text[:max_message_length] + "\n\n💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\n_Reply 'menu' for more options._"
                         else:
-                            combined_text += "\n\n💡 View other terms? Reply with term code (e.g., *2025-1*, *2025-3*)\n_Reply 'menu' for more options._"
+                            combined_text += "\n\n💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\n_Reply 'menu' for more options._"
                         user_state.state = "awaiting_term_statement"
                         user_state.last_updated = current_time
                         session.commit()
@@ -474,7 +474,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                         user_state.state = "awaiting_term_gatepass"
                         user_state.last_updated = current_time
                         session.commit()
-                        return f"📅 *Hi {fullname},*\nPlease reply with a valid term (e.g., *2025-1*, *2025-2*, *2025-3*) for all students.\n{menu_text}"
+                        return f"📅 *Hi {fullname},*\nPlease reply with a valid term (e.g., *2026-2*, *2026-1*) for all students.\n{menu_text}"
 
                     term_start = config.TERM_START_DATES.get(default_term)
                     term_end = config.TERM_END_DATES.get(default_term)
@@ -483,7 +483,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                         user_state.state = "awaiting_term_gatepass"
                         user_state.last_updated = current_time
                         session.commit()
-                        return f"📅 *Hi {fullname},*\nTerm *{default_term}* has not started yet. Please select a current or past term (e.g., *2025-1*, *2025-2*) for all students.\n{menu_text}"
+                        return f"📅 *Hi {fullname},*\nTerm *{default_term}* has not started yet. Please select a current or past term (e.g., *2026-2*, *2026-1*) for all students.\n{menu_text}"
 
                     if term_end and current_date > term_end.date():
                         user_state.state = "main_menu"
@@ -771,6 +771,10 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                             
                             if not parsed:
                                 logger.warning(f"Unknown transport fee type: {fee_type}", extra=extra_log)
+                                student_partial.append(
+                                    f"⚠️ Unknown transport fee type: {fee_type}\n"
+                                    f"   Amount: ${amount:.2f}"
+                                )
                                 continue
                             
                             route_type, service_type, is_fully_paid, expected_amount = parsed
@@ -796,7 +800,8 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                     service_type=service_type,
                                     amount_paid=amount,
                                     whatsapp_number=whatsapp_number,
-                                    skip_whatsapp=False
+                                    skip_whatsapp=False,
+                                    request_id=request_id
                                 )
                                 
                                 logger.debug(f"[TransportPass Response] {student_id} - {status_code} - {result}", extra=extra_log)
@@ -818,9 +823,21 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                     )
                                 else:
                                     error_msg = result.get("error", "Unknown error") if isinstance(result, dict) else "Unknown error"
+                                    route_display = route_type.capitalize()
+                                    service_display = service_type.replace("_", " ").title()
                                     logger.error(f"Failed to generate transport pass for {student_id}: {error_msg}", extra=extra_log)
+                                    student_partial.append(
+                                        f"❌ {route_display} - {service_display}:\n"
+                                        f"   Error: {error_msg}"
+                                    )
                             except Exception as e:
                                 logger.error(f"Transport pass service error for {student_id}: {str(e)}", extra=extra_log)
+                                route_display = route_type.capitalize() if 'route_type' in locals() else "Unknown"
+                                service_display = service_type.replace("_", " ").title() if 'service_type' in locals() else "Unknown"
+                                student_partial.append(
+                                    f"❌ {route_display} - {service_display}:\n"
+                                    f"   Service error: {str(e)}"
+                                )
                         
                         # Build student result
                         if student_passes or student_partial:
@@ -904,7 +921,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                         user_state.state = "main_menu"
                         user_state.last_updated = current_time
                         session.commit()
-                        return f"📅 *Hi {fullname},*\nTerm *{term}* has not started yet. Please select a current or past term (e.g., *2025-1*, *2025-2*).\n{menu_text}"
+                        return f"📅 *Hi {fullname},*\nTerm *{term}* has not started yet. Please select a current or past term (e.g., *2026-2*, *2026-1*).\n{menu_text}"
 
                     balance_texts = []
                     for student_id in student_ids:
@@ -924,6 +941,14 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                 f"  Total Fees: ${total_fees:.2f}\n"
                                 f"  Total Paid: ${total_paid:.2f}"
                             )
+                        elif balance < 0:
+                            # Overpayment / Credit
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*:\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}\n"
+                                f"  Credit: ${abs(balance):.2f} 💰"
+                            )
                         else:
                             balance_texts.append(
                                 f"*{student_id} ({student_name})*:\n"
@@ -936,7 +961,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                         response_text = (
                             f"📊 *Hi {fullname},*\n"
                             f"No fees recorded for any students in term *{term}*. Please contact _admin@shiningsmilescollege.ac.zw_.\n\n"
-                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\n{menu_text}"
                         )
                     else:
                         response_text = (
@@ -944,7 +969,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                             f"📊 *Balance for Term {term}:*\n\n" +
                             "\n\n".join(balance_texts) + 
                             f"\n\n💬 *Want detailed statements?* Reply *statement {term}*\n"
-                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\n{menu_text}"
                         )
                     
                     user_state.state = "main_menu"
@@ -1000,11 +1025,19 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                     if billed_fees.get("data", {}).get("bills")
                                     else "No fees recorded."
                                 )
+                                # Determine balance label
+                                if balance > 0:
+                                    balance_label = f"*Balance Owed*: ${balance:.2f}"
+                                elif balance < 0:
+                                    balance_label = f"*Credit/Overpayment*: ${abs(balance):.2f}"
+                                else:
+                                    balance_label = "*Status*: ✅ *Fully Paid*"
+
                                 statement_text = (
                                     f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
                                     f"*Total Fees*: ${total_fees:.2f}\n"
                                     f"*Total Paid*: ${total_paid:.2f}\n"
-                                    f"*Balance Owed*: ${balance:.2f}\n"
+                                    f"{balance_label}\n"
                                     f"*Fees Charged*:\n{fee_details}\n"
                                     f"*Payments*:\n{payment_details}"
                                 ) if balance != 0.0 or total_fees <= 0.0 else (
@@ -1012,7 +1045,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                     f"*Great news!* Balance is *fully paid*.\n"
                                     f"*Total Fees*: ${total_fees:.2f}\n"
                                     f"*Total Paid*: ${total_paid:.2f}\n"
-                                    f"*Balance Owed*: ${balance:.2f}\n"
+                                    f"{balance_label}\n"
                                     f"*Fees Charged*:\n{fee_details}\n"
                                     f"*Payments*:\n{payment_details}"
                                 )
@@ -1059,7 +1092,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                 user_state.last_updated = current_time
                 session.commit()
                 # Trigger balance view for current term
-                term = config.get_current_term() or config.get_most_recent_completed_term() or "2026-1"
+                term = config.get_current_term() or config.get_most_recent_completed_term() or "2026-2"
                 
                 try:
                     balance_texts = []
@@ -1080,6 +1113,14 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                 f"  Total Fees: ${total_fees:.2f}\n"
                                 f"  Total Paid: ${total_paid:.2f}"
                             )
+                        elif balance < 0:
+                            # Overpayment / Credit
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*:\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}\n"
+                                f"  Credit: ${abs(balance):.2f} 💰"
+                            )
                         else:
                             balance_texts.append(
                                 f"*{student_id} ({student_name})*:\n"
@@ -1092,7 +1133,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                         response_text = (
                             f"📊 *Hi {fullname},*\n"
                             f"No fees recorded for any students in term *{term}*.\n\n"
-                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\n{menu_text}"
                         )
                     else:
                         response_text = (
@@ -1100,7 +1141,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                             f"📊 *Balance for Term {term}:*\n\n" +
                             "\n\n".join(balance_texts) + 
                             f"\n\n💬 *Want detailed statements?* Reply *statement {term}*\n"
-                            f"💡 View other terms? Reply with term code (e.g., *2026-1*, *2025-3*)\n{menu_text}"
+                            f"💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\n{menu_text}"
                         )
                     return response_text
                 except Exception as e:
@@ -1112,7 +1153,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                 user_state.state = "awaiting_term_statement"
                 user_state.last_updated = current_time
                 session.commit()
-                return f"📊 *Hi {fullname},*\nPlease reply with a valid term (e.g., *2025-1*, *2025-2*, *2025-3*) for all students."
+                return f"📊 *Hi {fullname},*\nPlease reply with a valid term (e.g., *2026-2*, *2026-1*) for all students."
             
             elif message_body in ["3", "gate pass", "get gate pass"]:
                 # User wants gate pass - redirect to main menu and let it handle
@@ -1202,11 +1243,19 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                     if billed_fees.get("data", {}).get("bills")
                                     else "No fees recorded."
                                 )
+                                # Determine balance label
+                                if balance > 0:
+                                    balance_label = f"*Balance Owed*: ${balance:.2f}"
+                                elif balance < 0:
+                                    balance_label = f"*Credit/Overpayment*: ${abs(balance):.2f}"
+                                else:
+                                    balance_label = "*Status*: ✅ *Fully Paid*"
+
                                 statement_text = (
                                     f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
                                     f"*Total Fees*: ${total_fees:.2f}\n"
                                     f"*Total Paid*: ${total_paid:.2f}\n"
-                                    f"*Balance Owed*: ${balance:.2f}\n"
+                                    f"{balance_label}\n"
                                     f"*Fees Charged*:\n{fee_details}\n"
                                     f"*Payments*:\n{payment_details}"
                                 ) if balance != 0.0 or total_fees <= 0.0 else (
@@ -1214,7 +1263,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                     f"*Great news!* Balance is *fully paid*.\n"
                                     f"*Total Fees*: ${total_fees:.2f}\n"
                                     f"*Total Paid*: ${total_paid:.2f}\n"
-                                    f"*Balance Owed*: ${balance:.2f}\n"
+                                    f"{balance_label}\n"
                                     f"*Fees Charged*:\n{fee_details}\n"
                                     f"*Payments*:\n{payment_details}"
                                 )
@@ -1227,13 +1276,13 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                             user_state.state = "awaiting_term_statement"
                             user_state.last_updated = current_time
                             session.commit()
-                            return f"📊 *Hi {fullname},*\nNo account statements found for any students in term *{term}*.\n\n💡 View other terms? Reply with term code (e.g., *2025-1*, *2025-3*)\nOr reply *menu* for main options."
+                            return f"📊 *Hi {fullname},*\nNo account statements found for any students in term *{term}*.\n\n💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\nOr reply *menu* for main options."
                         else:
                             combined_text = f"Account statement for term {term}:\n\n" + "\n\n".join(statement_texts)
                             if len(combined_text) > max_message_length:
-                                combined_text = combined_text[:max_message_length] + "\n\n💡 View other terms? Reply with term code (e.g., *2025-1*, *2025-3*)\n_Reply 'menu' for more options._"
+                                combined_text = combined_text[:max_message_length] + "\n\n💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\n_Reply 'menu' for more options._"
                             else:
-                                combined_text += "\n\n💡 View other terms? Reply with term code (e.g., *2025-1*, *2025-3*)\n_Reply 'menu' for more options._"
+                                combined_text += "\n\n💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\n_Reply 'menu' for more options._"
                             user_state.state = "awaiting_term_statement"
                             user_state.last_updated = current_time
                             session.commit()
@@ -1767,10 +1816,10 @@ def lambda_handler(event, context):
             from services.gatepass_service import verify_gatepass
             pass_id = query.get('pass_id')
             whatsapp_number = query.get('whatsapp_number')
-            
+
             # verify_gatepass returns (response, status_code)
             response, status_code = verify_gatepass(pass_id, whatsapp_number)
-            
+
             # If response is HTML (string), return text/html
             if isinstance(response, str):
                 return {
@@ -1784,6 +1833,74 @@ def lambda_handler(event, context):
                     'statusCode': status_code,
                     'headers': {'Content-Type': 'application/json'},
                     'body': json.dumps(response)
+                }
+
+        if path == '/verify-transport-pass':
+            print("🎯 DEBUG: Handling Transport Pass Verification")
+            from services.transport_pass_service import verify_transport_pass
+            from flask import render_template
+
+            pass_id = query.get('pass_id')
+            whatsapp_number = query.get('whatsapp_number')
+
+            if not pass_id or not whatsapp_number:
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({"error": "pass_id and whatsapp_number are required"})
+                }
+
+            try:
+                result, status_code = verify_transport_pass(pass_id, whatsapp_number)
+
+                # Render HTML template
+                if status_code == 200 and result.get("status") == "valid":
+                    # Valid transport pass
+                    html = render_template(
+                        'verify_transport_pass.html',
+                        status='valid',
+                        student_name=result.get('student_name', 'Unknown'),
+                        student_id=result.get('student_id', 'N/A'),
+                        route=result.get('route', 'N/A'),
+                        amount_paid=f"{result.get('amount_paid', 0):.2f}",
+                        issued_date=result.get('issued_date', 'N/A'),
+                        expiry_date=result.get('expiry_date', 'N/A'),
+                        registered_number=result.get('registered_number', 'N/A'),
+                        warning=result.get('warning')
+                    )
+                    return {
+                        'statusCode': 200,
+                        'headers': {'Content-Type': 'text/html'},
+                        'body': html
+                    }
+                else:
+                    # Invalid or expired transport pass
+                    error_message = result.get('error', 'Transport pass is invalid or expired')
+                    html = render_template(
+                        'verify_transport_pass.html',
+                        status='invalid',
+                        student_name='N/A',
+                        student_id='N/A',
+                        route='N/A',
+                        amount_paid='0.00',
+                        issued_date='N/A',
+                        expiry_date='N/A',
+                        registered_number='N/A',
+                        warning=error_message
+                    )
+                    return {
+                        'statusCode': status_code,
+                        'headers': {'Content-Type': 'text/html'},
+                        'body': html
+                    }
+            except Exception as e:
+                print(f"Error rendering transport pass template: {e}")
+                traceback.print_exc()
+                # Fallback to JSON
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({"error": f"Failed to verify transport pass: {str(e)}"})
                 }
 
         # Webhook verification - only for GET requests
@@ -2076,6 +2193,86 @@ def lambda_handler(event, context):
                     }
                 except Exception as db_err:
                     session.rollback()
+                    return {'statusCode': 500, 'body': json.dumps({"error": f"DB Error: {str(db_err)}"}) }
+                finally:
+                    session.close()
+
+            except Exception as e:
+                return {'statusCode': 500, 'body': json.dumps({"error": str(e)})}
+
+        # Admin Update Phone
+        if path == '/admin/update-phone':
+            print("🎯 DEBUG: Admin Update Phone")
+            try:
+                body = json.loads(event.get('body', '{}'))
+                admin_key = body.get('key')
+                student_id = body.get('student_id')
+                new_phone = body.get('new_phone')
+                expected_key = os.getenv("ADMIN_SECRET", "admin123")
+                
+                if admin_key != expected_key:
+                    return {'statusCode': 401, 'body': json.dumps({"error": "Unauthorized"})}
+                
+                if not student_id or not new_phone:
+                    return {'statusCode': 400, 'body': json.dumps({"error": "Missing student_id or new_phone"})}
+                
+                # Dynamic imports
+                from utils.database import init_db
+                from sqlalchemy import text
+                
+                # Normalize phone number (Zimbabwe format)
+                # 071... -> +26371...
+                # 263... -> +263...
+                cleaned_phone = new_phone.strip().replace(" ", "").replace("-", "")
+                if cleaned_phone.startswith("0"):
+                    cleaned_phone = "+263" + cleaned_phone[1:]
+                elif cleaned_phone.startswith("263"):
+                    cleaned_phone = "+" + cleaned_phone
+                elif len(cleaned_phone) == 9: # e.g. 711206287
+                    cleaned_phone = "+263" + cleaned_phone
+                    
+                # Ensure updated phone is used in query
+                new_phone = cleaned_phone
+                
+                session = init_db()
+                try:
+                    # Update all phone fields for consistency
+                    update_query = text("""
+                        UPDATE student_contacts 
+                        SET preferred_phone_number = :phone,
+                            guardian_mobile_number = :phone,
+                            student_mobile = :phone,
+                            last_updated = CURRENT_TIMESTAMP
+                        WHERE student_id = :student_id
+                        RETURNING student_id, firstname, lastname, preferred_phone_number;
+                    """)
+                    
+                    result = session.execute(update_query, {"phone": new_phone, "student_id": student_id}).fetchone()
+                    session.commit()
+                    
+                    if result:
+                        msg = f"Successfully updated phone to {new_phone} for {result.firstname}."
+                        return {
+                            'statusCode': 200, 
+                            'headers': {'Content-Type': 'application/json'},
+                            'body': json.dumps({
+                                "success": True, 
+                                "message": msg,
+                                "student": {
+                                    "phone": new_phone
+                                }
+                            })
+                        }
+                    else:
+                        return {
+                            'statusCode': 404, 
+                            'headers': {'Content-Type': 'application/json'},
+                            'body': json.dumps({"error": f"Student {student_id} not found."})
+                        }
+                        
+                except Exception as db_err:
+                    session.rollback()
+                    print(f"DB Error Update Phone: {db_err}")
                     return {'statusCode': 500, 'body': json.dumps({"error": f"DB Error: {str(db_err)}"}) }
                 finally:
                     session.close()
