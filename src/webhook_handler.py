@@ -526,13 +526,20 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                             student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
                             
                             if status_code == 200:
-                                if "already valid" in status_msg or "resent" in status_msg:
+                                if "already valid" in status_msg or "resent" in status_msg or "valid (text-only" in status_msg:
                                     gatepass_texts.append(
                                         f"*Gate Pass for {student_id} ({student_name})*:\n"
                                         f"You *already have a valid gate pass*.\n"
                                         f"*Pass ID*: {result.get('pass_id')}\n"
                                         f"*Expires*: _{result.get('expiry_date')}_\n"
                                         f"*PDF re-sent to*: {result.get('whatsapp_number')}"
+                                    )
+                                elif "no gate pass" in status_msg:
+                                    reason = result.get('reason', 'Payment below required threshold.')
+                                    gatepass_texts.append(
+                                        f"*Gate Pass for {student_id} ({student_name})*:\n"
+                                        f"⚠️ *Gate pass not issued.*\n"
+                                        f"{reason}"
                                     )
                                 else:
                                     gatepass_texts.append(
