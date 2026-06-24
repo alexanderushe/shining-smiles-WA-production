@@ -219,3 +219,13 @@ def generate_ai_response(user_message: str, context: str = None) -> str:
     except Exception as e:
         logger.error(f"❌ OpenAI request failed: {e}")
         return "I'm here to help! Reply *menu* for options 😊"
+
+
+class AIClient:
+    """Thin adapter for route code that expects an object-oriented AI client."""
+
+    def __init__(self, request_id=None):
+        self.request_id = request_id
+
+    def generate_response(self, prompt, context=None):
+        return generate_ai_response(prompt, context=context)

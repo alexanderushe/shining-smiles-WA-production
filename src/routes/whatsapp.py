@@ -3,12 +3,14 @@ from twilio.twiml.messaging_response import MessagingResponse
 from datetime import datetime, timezone, date
 import requests
 import json
-from utils.database import init_db, StudentContact, UserState, GatePass
+from utils.database import init_db, StudentContact, UserState, GatePass, find_contacts_by_phone, get_user_state, resolve_school_id
 from utils.whatsapp import send_whatsapp_message
 from utils.logger import setup_logger
 from api.sms_client import SMSClient, RateLimitException
 from utils.ai_client import AIClient
 from config import get_config
+from utils.tenant_context import reset_current_tenant, resolve_tenant_config, set_current_tenant
+from services.reminder_service import update_or_create_contact
 import uuid
 import re
 import traceback
@@ -59,8 +61,10 @@ def process_cloud_api_message(message, metadata):
     """Process incoming WhatsApp Cloud API message"""
     try:
         request_id = str(uuid.uuid4())
+        tenant_config = resolve_tenant_config(metadata)
+        tenant_token = set_current_tenant(tenant_config)
         session = init_db()
-        sms_client = SMSClient(request_id=request_id)
+        sms_client = SMSClient(request_id=request_id, tenant_config=tenant_config)
         ai_client = AIClient(request_id=request_id)
 
         # Extract message details
@@ -75,7 +79,10 @@ def process_cloud_api_message(message, metadata):
             logger.info(f"Unsupported message type: {message_type}")
             return
 
-        logger.info(f"Processing message from {from_number}: {message_body}")
+        logger.info(
+            f"Processing message from {from_number}: {message_body}",
+            extra={"request_id": request_id, "school_id": tenant_config.get("school_id"), "phone_number_id": tenant_config.get("phone_number_id")},
+        )
 
         # Process the message using the same logic as Twilio webhook
         response_text = handle_whatsapp_message(
@@ -87,7 +94,8 @@ def process_cloud_api_message(message, metadata):
             send_whatsapp_message(
                 to=from_number,
                 message=response_text,
-                use_cloud_api=True
+                use_cloud_api=True,
+                tenant_config=tenant_config,
             )
 
     except Exception as e:
@@ -96,6 +104,8 @@ def process_cloud_api_message(message, metadata):
     finally:
         if 'session' in locals():
             session.close()
+        if 'tenant_token' in locals():
+            reset_current_tenant(tenant_token)
 
 def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, ai_client, request_id):
     """
@@ -105,12 +115,51 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
     current_time = datetime.now(timezone.utc)
     extra_log = {"phone_number": whatsapp_number, "request_id": request_id}
 
+    # Initialize Twilio Response object (CRITICAL fix for registered users)
+    response = MessagingResponse()
+
+    # Monkey patch response.message to support Cloud API direct delivery
+    def cloud_api_message_sender(text):
+        # Create mock object compatible with existing code (needs .body attribute and .media method)
+        class MockBody:
+            def __init__(self, t): 
+                self.body = t
+            
+            def media(self, url):
+                # Send immediately with caption if media is attached
+                try:
+                    text_caption = str(self.body) if self.body else ""
+                    logger.info(f"Cloud API Media Reply to {whatsapp_number}: {url} (Caption: {text_caption})", extra=extra_log)
+                    send_whatsapp_message(whatsapp_number, text_caption, media_url=url)
+                    self.body = "" # Clear body to prevent duplicate send by process loop
+                except Exception as e:
+                    logger.error(f"Cloud API Media Send Failed: {e}", extra=extra_log)
+                return self
+
+        return MockBody(text)
+    
+    # Apply monkey patch
+    response.message = cloud_api_message_sender
+
+    # Hidden command for phone update
+    if message_body == "admin_update_phone_secret":
+        try:
+             logger.info("Executing Admin Phone Update...", extra=extra_log)
+             from scripts.update_phone_numbers import lambda_handler as update_handler
+             result = update_handler({}, {})
+             logger.info(f"Update Result: {result}", extra=extra_log)
+             return f"Update Result: {result.get('body', 'No body')}"
+        except Exception as e:
+             logger.error(f"Update failed: {e}", extra=extra_log)
+             return f"Update failed: {e}"
+
     menu_text = (
         "Reply with a number or keyword:\n"
         "➊ *View Balance*\n"
         "➋ *Request Statement*\n"
         "➌ *Get Gate Pass*\n"
-        "➍ *Transport Pass* 🚌\n"
+        "➍ *Request Invoice*\n"
+        "➎ *Transport Pass* 🚌\n"
     )
     unregistered_menu_text = (
         "Reply with a number or keyword:\n"
@@ -129,81 +178,27 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
         logger.error(f"Invalid WhatsApp number format: {whatsapp_number}", extra={"request_id": request_id})
         return "⚠️ Invalid phone number format. Please contact support."
 
-    contacts = session.query(StudentContact).filter_by(phone_number=whatsapp_number).all()
-    user_state = session.query(UserState).filter_by(phone_number=whatsapp_number).first()
-
-    if not user_state:
-        user_state = UserState(
-            phone_number=whatsapp_number,
-            query_count=0,
-            last_updated=current_time
-        )
-        session.add(user_state)
-        session.commit()
-
-    # Handle unregistered users
-    if not contacts:
-        logger.debug(f"No contacts found for {whatsapp_number}, treating as unregistered", extra=extra_log)
-
-        if message_body in ["menu", "start"]:
-            return f"{unregistered_prompt}\n\n{unregistered_menu_text}"
-
-        elif message_body in ["1", "about", "about our school"]:
-            logger.info(f"Processing 'about' query for {whatsapp_number}", extra=extra_log)
-            user_state.query_count += 1
-            user_state.last_updated = current_time
-            session.commit()
-            response_text = ai_client.get_ai_response("Tell me about Shining Smiles School")
-            return response_text
-
-        elif message_body in ["2", "admissions", "admissions info"]:
-            user_state.query_count += 1
-            user_state.last_updated = current_time
-            session.commit()
-            response_text = ai_client.get_ai_response("What are the admissions requirements for Shining Smiles School?")
-            return response_text
-
-        elif message_body in ["3", "events", "upcoming events"]:
-            user_state.query_count += 1
-            user_state.last_updated = current_time
-            session.commit()
-            response_text = ai_client.get_ai_response("What upcoming events does Shining Smiles School have?")
-            return response_text
-
-        elif message_body in ["4", "contact", "contact us"]:
-            user_state.query_count += 1
-            user_state.last_updated = current_time
-            session.commit()
-            response_text = ai_client.get_ai_response("How can I contact Shining Smiles School?")
-            return response_text
-
-        elif message_body in ["5", "help"]:
-            return (
-                f"❓ *Help*: Ask me anything about Shining Smiles School or reply *menu* for options. "
-                f"For account-related queries, contact _admin@shiningsmilescollege.ac.zw_."
-            )
-
-        else:
-            user_state.query_count += 1
-            user_state.last_updated = current_time
-            session.commit()
-            response_text = ai_client.get_ai_response(message_body)
-            return response_text
-
-    # Handle registered users (rest of the original logic would go here)
-    # For brevity, I'll just return a basic response for now
-    fullname = f"{contacts[0].firstname or 'Parent'} {contacts[0].lastname or ''}".strip()
-
-    if message_body in ["menu", "start"]:
-        return f"👋 *Hi {fullname}!*\nWelcome back to Shining Smiles School.\n\n{menu_text}"
-
-@whatsapp_bp.route("/whatsapp-incoming", methods=["POST"])
-def whatsapp_menu():
-    request_id = str(uuid.uuid4())
-    session = init_db()
-    sms_client = SMSClient(request_id=request_id)
-    ai_client = AIClient(request_id=request_id)
-    response = MessagingResponse()
+    school_id = resolve_school_id()
+    menu_text = (
+        "Reply with a number or keyword:\n"
+        "➊ *View Balance*\n"
+        "➋ *Request Statement*\n"
+        "➌ *Get Gate Pass*\n"
+        "➍ *Request Invoice*\n"
+        "➎ *Transport Pass* 🚌\n"
+    )
+    unregistered_menu_text = (
+        "Reply with a number or keyword:\n"
+        "➊ *About Our School* ✨\n"
+        "➋ *Admissions Info* 📚\n"
+        "➌ *Upcoming Events* 🎉\n"
+        "➍ *Contact Us* 📞\n"
+        "➎ *Help* ❓"
+    )
+    unregistered_prompt = (
+        "😊 *Welcome to Shining Smiles School!* I'm _Mya_, your friendly assistant here to help with questions about our school, admissions, events, or how to reach us. "
+        "Ask me anything or reply *menu* for options. For account-related queries, contact _admin@shiningsmilescollege.ac.zw_. ✨"
+    )
 
     message_body = request.form.get("Body", "").strip().lower()
     raw_from = request.form.get("From", "")
@@ -223,9 +218,9 @@ def whatsapp_menu():
         session.close()
         return Response(str(response), mimetype="application/xml")
 
-    user_state = session.query(UserState).filter_by(phone_number=whatsapp_number).first()
+    user_state = get_user_state(session, whatsapp_number, school_id=school_id)
     if not user_state:
-        user_state = UserState(phone_number=whatsapp_number, state="unregistered_menu", query_count=0, query_date=date.today())
+        user_state = UserState(school_id=school_id, phone_number=whatsapp_number, state="unregistered_menu", query_count=0, query_date=date.today())
         session.add(user_state)
         session.commit()
         # Send introduction for new unregistered users
@@ -252,8 +247,48 @@ def whatsapp_menu():
             session.close()
             return Response(str(response), mimetype="application/xml")
 
-    # Query all contacts associated with the phone number
-    contacts = session.query(StudentContact).filter_by(preferred_phone_number=whatsapp_number).all()
+    # Query all contacts associated with the phone number. If the local cache is
+    # cold post-W2.4, fall back to the live SaaS phone resolver and hydrate cache.
+    contacts = find_contacts_by_phone(session, whatsapp_number, school_id=school_id)
+    if not contacts:
+        try:
+            resolved = sms_client.resolve_by_phone(whatsapp_number)
+            resolved_students = resolved.get("students", []) if isinstance(resolved, dict) else []
+            if resolved_students:
+                logger.info(
+                    f"Resolved {len(resolved_students)} student(s) from SaaS for {whatsapp_number}",
+                    extra={"request_id": request_id, "school_id": school_id},
+                )
+                for student in resolved_students:
+                    student_id = student.get("student_id")
+                    if not student_id:
+                        continue
+                    profile = sms_client.get_student_profile(student_id)
+                    if not profile or "data" not in profile:
+                        logger.warning(
+                            f"Profile fetch failed after phone resolve for {student_id}",
+                            extra={"request_id": request_id, "school_id": school_id},
+                        )
+                        continue
+                    balance = float(student.get("outstanding_balance") or 0)
+                    update_or_create_contact(
+                        session,
+                        student_id,
+                        profile["data"],
+                        balance,
+                        school_id=school_id,
+                    )
+                contacts = find_contacts_by_phone(session, whatsapp_number, school_id=school_id)
+                if contacts and user_state.state == "unregistered_menu":
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+        except Exception as resolve_error:
+            logger.error(
+                f"Phone resolve fallback failed for {whatsapp_number}: {resolve_error}",
+                extra={"request_id": request_id, "school_id": school_id},
+            )
+
     if not contacts:
         extra_log["student_id"] = None
         if message_body == "menu":
@@ -417,6 +452,14 @@ def whatsapp_menu():
                                 f"  Total Fees: ${total_fees:.2f}\n"
                                 f"  Total Paid: ${total_paid:.2f}"
                             )
+                        elif balance < 0:
+                            # Overpayment / Credit
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*:\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}\n"
+                                f"  Credit: ${abs(balance):.2f} 💰"
+                            )
                         else:
                             balance_texts.append(
                                 f"*{student_id} ({student_name})*:\n"
@@ -446,7 +489,7 @@ def whatsapp_menu():
                     user_state.last_updated = current_time
                     session.commit()
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
 
                 except RateLimitException:
                     logger.warning(f"Rate limit hit while fetching balance for {student_ids}, term {term}", extra=extra_log)
@@ -458,7 +501,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except Exception as e:
                     logger.error(f"Unexpected error in balance retrieval for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -470,7 +513,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
 
             elif message_body in ["2", "statement", "request statement"]:
                 try:
@@ -484,7 +527,7 @@ def whatsapp_menu():
                         session.commit()
                         logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                         session.close()
-                        return Response(str(response), mimetype="application/xml")
+                        return str(response_message.body)
 
                     current_date = current_time.date()
                     term_start = config.TERM_START_DATES.get(default_term)
@@ -537,11 +580,19 @@ def whatsapp_menu():
                                 if billed_fees.get("data", {}).get("bills")
                                 else "No fees recorded."
                             )
+                            # Determine balance label
+                            if balance > 0:
+                                balance_label = f"*Balance Owed*: ${balance:.2f}"
+                            elif balance < 0:
+                                balance_label = f"*Credit/Overpayment*: ${abs(balance):.2f}"
+                            else:
+                                balance_label = "*Status*: ✅ *Fully Paid*"
+
                             statement_text = (
                                 f"*Account Statement for {student_id} ({student_name}, Term {default_term})*:\n"
                                 f"*Total Fees*: ${total_fees:.2f}\n"
                                 f"*Total Paid*: ${total_paid:.2f}\n"
-                                f"*Balance Owed*: ${balance:.2f}\n"
+                                f"{balance_label}\n"
                                 f"*Fees Charged*:\n{fee_details}\n"
                                 f"*Payments*:\n{payment_details}"
                             ) if balance != 0.0 or total_fees <= 0.0 else (
@@ -549,7 +600,7 @@ def whatsapp_menu():
                                 f"*Great news!* Balance is *fully paid*.\n"
                                 f"*Total Fees*: ${total_fees:.2f}\n"
                                 f"*Total Paid*: ${total_paid:.2f}\n"
-                                f"*Balance Owed*: ${balance:.2f}\n"
+                                f"{balance_label}\n"
                                 f"*Fees Charged*:\n{fee_details}\n"
                                 f"*Payments*:\n{payment_details}"
                             )
@@ -593,7 +644,7 @@ def whatsapp_menu():
                                     user_state.last_updated = current_time
                                     session.commit()
                                     session.close()
-                                    return Response(str(response), mimetype="application/xml")
+                                    return str(response_message.body)
                             response_message = response.message(
                                 f"📨 *Hi {fullname},*\n*Statements have been sent for all students.*\n{menu_text}"
                             )
@@ -616,7 +667,7 @@ def whatsapp_menu():
                     user_state.last_updated = current_time
                     session.commit()
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
 
                 except RateLimitException:
                     logger.warning(f"Rate limit hit while fetching statements for {student_ids}, term {default_term}", extra=extra_log)
@@ -628,7 +679,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except ValueError as e:
                     logger.error(f"Account statement error for {student_ids}, term {default_term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -641,7 +692,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except requests.RequestException as e:
                     logger.error(f"Failed to fetch statements for {student_ids}, term {default_term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -653,7 +704,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except Exception as e:
                     logger.error(f"Unexpected error in statement generation for {student_ids}, term {default_term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -665,7 +716,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
 
             elif message_body in ["3", "gate pass", "get gate pass"]:
                 try:
@@ -819,7 +870,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except ValueError as e:
                     logger.error(f"Gate pass error for {student_ids}, term {default_term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -831,7 +882,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except requests.RequestException as e:
                     logger.error(f"Failed to generate gate passes for {student_ids}, term {default_term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -843,7 +894,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except Exception as e:
                     logger.error(f"Unexpected error in gate pass generation for {student_ids}, term {default_term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -855,9 +906,118 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
 
-            elif message_body in ["4", "transport pass", "get transport pass", "transport"]:
+            elif message_body in ["4", "invoice", "request invoice"]:
+                # Auto-detect current term
+                term = config.get_current_term() or config.get_most_recent_completed_term()
+                
+                if not term:
+                    user_state.state = "main_menu"
+                    user_state.last_updated = current_time
+                    session.commit()
+                    response_message = response.message(f"⚠️ *Hi {fullname},*\n*No term data available.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}")
+                    logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                    session.close()
+                    # Return text for Cloud API compatibility
+                    return str(response_message.body)
+                
+                try:
+                    from services.invoice_service import generate_invoice
+                    
+                    invoice_results = []
+                    for student_id in student_ids:
+                        try:
+                            invoice_data, status_code = generate_invoice(student_id, term, whatsapp_number, request_id)
+                            
+                            if status_code == 200:
+                                invoice_results.append({
+                                    "student_id": student_id,
+                                    "success": True,
+                                    "data": invoice_data
+                                })
+                            else:
+                                invoice_results.append({
+                                    "student_id": student_id,
+                                    "success": False,
+                                    "error": invoice_data.get("error", "Unknown error")
+                                })
+                        except Exception as e:
+                            logger.error(f"Error generating invoice for {student_id}: {str(e)}", extra=extra_log)
+                            invoice_results.append({
+                                    "student_id": student_id,
+                                    "success": False,
+                                    "error": str(e)
+                                })
+                    
+                    # Build response for all students
+                    success_messages = []
+                    error_messages = []
+                    
+                    for result in invoice_results:
+                        if result["success"]:
+                            data = result["data"]
+                            student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == result["student_id"]), "Unknown")
+                            
+                            # Send PDF via WhatsApp
+                            try:
+                                # Send text message first
+                                message = (
+                                    f"✅ *Invoice Generated!*\n\n"
+                                    f"📄 Invoice No: {data['invoice_number']}\n"
+                                    f"👤 Student: {student_name} ({result['student_id']})\n"
+                                    f"📅 Term: {term}\n"
+                                    f"💵 Total: ${data['total_amount']:.2f}\n"
+                                    f"📆 Due Date: {data['due_date']}\n\n"
+                                    f"📎 PDF being sent separately..."
+                                )
+                                send_whatsapp_message(whatsapp_number, message)
+                                
+                                # Send PDF with proper caption and filename
+                                invoice_caption = f"Invoice for {student_name} - Term {term}"
+                                send_whatsapp_message(
+                                    whatsapp_number,
+                                    invoice_caption,
+                                    media_url=data['pdf_url'],
+                                    filename=f"Invoice_{data['invoice_number']}.pdf"
+                                )
+                                
+                                success_messages.append(f"✅ {student_name} ({result['student_id']}) - Invoice {data['invoice_number']}")
+                            except Exception as e:
+                                logger.error(f"Failed to send invoice via WhatsApp for {result['student_id']}: {str(e)}", extra=extra_log)
+                                error_messages.append(f"❌ {result['student_id']} - Failed to send")
+                        else:
+                            error_messages.append(f"❌ {result['student_id']} - {result['error']}")
+                    
+                    # Final summary message
+                    if success_messages:
+                        response_text = f"*Hi {fullname},*\n\n" + "\n".join(success_messages)
+                        if error_messages:
+                            response_text += "\n\n" + "\n".join(error_messages)
+                        response_text += f"\n\n💡 Need invoice for another term?\nReply 'invoice {term}'\n\n{menu_text}"
+                    else:
+                        response_text = f"*Hi {fullname},*\n\n❌ *Unable to generate invoices:*\n\n" + "\n".join(error_messages) + f"\n\nPlease contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                    
+                    response_message = response.message(response_text)
+                    logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                    
+                except ImportError as e:
+                    logger.error(f"Failed to import invoice_service: {str(e)}", extra=extra_log)
+                    response_message = response.message(f"⚠️ *Hi {fullname},*\n*Invoice service temporarily unavailable.* Please try again later or contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}")
+                    logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+
+                except Exception as e:
+                    logger.error(f"Unexpected error in invoice generation flow: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
+                    response_message = response.message(f"⚠️ *Hi {fullname},*\n*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}")
+                    logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
+                
+                user_state.state = "main_menu"
+                user_state.last_updated = current_time
+                session.commit()
+                session.close()
+                return str(response_message.body)
+
+            elif message_body in ["5", "transport pass", "get transport pass", "transport"]:
                 try:
                     logger.debug(f"Attempting transport passes for student_ids: {student_ids}, term: {default_term}", extra=extra_log)
                     
@@ -884,7 +1044,7 @@ def whatsapp_menu():
                         user_state.last_updated = current_time
                         session.commit()
                         session.close()
-                        return Response(str(response), mimetype="application/xml")
+                        return str(response_message.body)
                     
                     transport_pass_results = []
                     
@@ -921,6 +1081,10 @@ def whatsapp_menu():
                             
                             if not parsed:
                                 logger.warning(f"Unknown transport fee type: {fee_type}", extra=extra_log)
+                                student_partial.append(
+                                    f"⚠️ Unknown transport fee type: {fee_type}\\n"
+                                    f"   Amount: ${amount:.2f}"
+                                )
                                 continue
                             
                             route_type, service_type, is_fully_paid, expected_amount = parsed
@@ -971,7 +1135,13 @@ def whatsapp_menu():
                                 )
                             else:
                                 error_msg = data.get("error", "Unknown error")
+                                route_display = route_type.capitalize()
+                                service_display = service_type.replace("_", " ").title()
                                 logger.error(f"Failed to generate transport pass for {student_id}: {error_msg}", extra=extra_log)
+                                student_partial.append(
+                                    f"❌ {route_display} - {service_display}:\\n"
+                                    f"   Error: {error_msg}"
+                                )
                         
                         # Build student result
                         if student_passes or student_partial:
@@ -1028,7 +1198,7 @@ def whatsapp_menu():
                     user_state.last_updated = current_time
                     session.commit()
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                     
                 except RateLimitException:
                     logger.warning(f"Rate limit hit while fetching transport pass data for {student_ids}, term {default_term}", extra=extra_log)
@@ -1040,7 +1210,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except Exception as e:
                     logger.error(f"Unexpected error in transport pass generation for {student_ids}, term {default_term}: {str(e)}\\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -1052,7 +1222,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
 
             elif message_body == "help":
                 response_message = response.message(
@@ -1109,6 +1279,14 @@ def whatsapp_menu():
                                 f"  Total Fees: ${total_fees:.2f}\n"
                                 f"  Total Paid: ${total_paid:.2f}"
                             )
+                        elif balance < 0:
+                            # Overpayment / Credit
+                            balance_texts.append(
+                                f"*{student_id} ({student_name})*:\n"
+                                f"  Total Fees: ${total_fees:.2f}\n"
+                                f"  Total Paid: ${total_paid:.2f}\n"
+                                f"  Credit: ${abs(balance):.2f} 💰"
+                            )
                         else:
                             balance_texts.append(
                                 f"*{student_id} ({student_name})*:\n"
@@ -1150,7 +1328,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except Exception as e:
                     logger.error(f"Unexpected error in balance retrieval for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -1162,7 +1340,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
 
             elif message_body.startswith("statement ") and len(message_body.split()) == 2:
                 # User typed "statement 2025-1" to get statement for specific term
@@ -1221,11 +1399,19 @@ def whatsapp_menu():
                                     if billed_fees.get("data", {}).get("bills")
                                     else "No fees recorded."
                                 )
+                                # Determine balance label
+                                if balance > 0:
+                                    balance_label = f"*Balance Owed*: ${balance:.2f}"
+                                elif balance < 0:
+                                    balance_label = f"*Credit/Overpayment*: ${abs(balance):.2f}"
+                                else:
+                                    balance_label = "*Status*: ✅ *Fully Paid*"
+
                                 statement_text = (
                                     f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
                                     f"*Total Fees*: ${total_fees:.2f}\n"
                                     f"*Total Paid*: ${total_paid:.2f}\n"
-                                    f"*Balance Owed*: ${balance:.2f}\n"
+                                    f"{balance_label}\n"
                                     f"*Fees Charged*:\n{fee_details}\n"
                                     f"*Payments*:\n{payment_details}"
                                 ) if balance != 0.0 or total_fees <= 0.0 else (
@@ -1233,7 +1419,7 @@ def whatsapp_menu():
                                     f"*Great news!* Balance is *fully paid*.\n"
                                     f"*Total Fees*: ${total_fees:.2f}\n"
                                     f"*Total Paid*: ${total_paid:.2f}\n"
-                                    f"*Balance Owed*: ${balance:.2f}\n"
+                                    f"{balance_label}\n"
                                     f"*Fees Charged*:\n{fee_details}\n"
                                     f"*Payments*:\n{payment_details}"
                                 )
@@ -1382,6 +1568,14 @@ def whatsapp_menu():
                                 f"*Total Paid*: ${total_paid:.2f}\n"
                                 f"*Balance Owed*: ${balance:.2f}"
                             )
+                        elif balance < 0:
+                            # Overpayment / Credit
+                            balance_texts.append(
+                                f"*Balance for {student_id} ({student_name}, Term {term})*:\n"
+                                f"*Total Fees*: ${total_fees:.2f}\n"
+                                f"*Total Paid*: ${total_paid:.2f}\n"
+                                f"*Credit*: ${abs(balance):.2f} 💰"
+                            )
                         else:
                             balance_texts.append(
                                 f"*Balance for {student_id} ({student_name}, Term {term})*:\n"
@@ -1419,7 +1613,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except ValueError as e:
                     logger.error(f"Account statement error for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -1432,7 +1626,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except requests.RequestException as e:
                     logger.error(f"Failed to fetch balance for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -1444,7 +1638,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except Exception as e:
                     logger.error(f"Unexpected error in balance retrieval for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -1456,7 +1650,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
 
             else:
                 response_message = response.message(
@@ -1523,11 +1717,19 @@ def whatsapp_menu():
                                 if billed_fees.get("data", {}).get("bills")
                                 else "No fees recorded."
                             )
+                            # Determine balance label
+                            if balance > 0:
+                                balance_label = f"*Balance Owed*: ${balance:.2f}"
+                            elif balance < 0:
+                                balance_label = f"*Credit/Overpayment*: ${abs(balance):.2f}"
+                            else:
+                                balance_label = "*Status*: ✅ *Fully Paid*"
+
                             statement_text = (
                                 f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
                                 f"*Total Fees*: ${total_fees:.2f}\n"
                                 f"*Total Paid*: ${total_paid:.2f}\n"
-                                f"*Balance Owed*: ${balance:.2f}\n"
+                                f"{balance_label}\n"
                                 f"*Fees Charged*:\n{fee_details}\n"
                                 f"*Payments*:\n{payment_details}"
                             ) if balance != 0.0 or total_fees <= 0.0 else (
@@ -1535,7 +1737,7 @@ def whatsapp_menu():
                                 f"*Great news!* Balance is *fully paid*.\n"
                                 f"*Total Fees*: ${total_fees:.2f}\n"
                                 f"*Total Paid*: ${total_paid:.2f}\n"
-                                f"*Balance Owed*: ${balance:.2f}\n"
+                                f"{balance_label}\n"
                                 f"*Fees Charged*:\n{fee_details}\n"
                                 f"*Payments*:\n{payment_details}"
                             )
@@ -1614,7 +1816,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except ValueError as e:
                     logger.error(f"Account statement error for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -1627,7 +1829,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except requests.RequestException as e:
                     logger.error(f"Failed to fetch statement for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -1639,7 +1841,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except Exception as e:
                     logger.error(f"Unexpected error in statement generation for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -1651,7 +1853,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
 
             else:
                 response_message = response.message(
@@ -1766,7 +1968,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except ValueError as e:
                     logger.error(f"Gate pass error for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -1778,7 +1980,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except requests.RequestException as e:
                     logger.error(f"Failed to generate gate passes for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -1790,7 +1992,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
                 except Exception as e:
                     logger.error(f"Unexpected error in gate pass generation for {student_ids}, term {term}: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
                     response_message = response.message(
@@ -1802,7 +2004,7 @@ def whatsapp_menu():
                     session.commit()
                     logger.info(f"Sending response to {whatsapp_number}: {response_message.body}", extra=extra_log)
                     session.close()
-                    return Response(str(response), mimetype="application/xml")
+                    return str(response_message.body)
 
             else:
                 response_message = response.message(

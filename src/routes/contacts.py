@@ -1,6 +1,6 @@
 # src/routes/contacts.py
 from flask import Blueprint, request, jsonify
-from utils.database import init_db, StudentContact
+from utils.database import init_db, StudentContact, get_student_contact, resolve_school_id
 from utils.logger import setup_logger
 from datetime import datetime, timezone
 import re
@@ -55,7 +55,8 @@ def update_contact():
         if not normalized_phone:
             return jsonify({"error": "Invalid phone number format"}), 400
 
-        contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+        school_id = resolve_school_id()
+        contact = get_student_contact(session, student_id, school_id=school_id)
         if contact:
             contact.firstname = firstname or contact.firstname
             contact.lastname = lastname or contact.lastname
@@ -68,6 +69,7 @@ def update_contact():
             logger.info(f"[Request {request_id}] Updated contact for {student_id}: {normalized_phone}")
         else:
             contact = StudentContact(
+                school_id=school_id,
                 student_id=student_id,
                 firstname=firstname,
                 lastname=lastname,
@@ -101,7 +103,8 @@ def get_student_profile():
             logger.error(f"[Request {request_id}] Missing student_id")
             return jsonify({"error": "student_id required", "received_args": dict(request.args)}), 400
 
-        contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+        school_id = resolve_school_id()
+        contact = get_student_contact(session, student_id, school_id=school_id)
         if contact and contact.last_api_sync and (datetime.now(timezone.utc) - contact.last_api_sync).total_seconds() < 24*3600:
             logger.info(f"[Request {request_id}] Found recent profile for {student_id} in database")
             return jsonify({
@@ -151,6 +154,7 @@ def get_student_profile():
                 contact.last_api_sync = datetime.now(timezone.utc)
             else:
                 contact = StudentContact(
+                    school_id=school_id,
                     student_id=student_id,
                     firstname=firstname,
                     lastname=lastname,

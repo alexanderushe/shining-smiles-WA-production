@@ -2,7 +2,7 @@
 from api.sms_client import SMSClient
 from utils.whatsapp import send_whatsapp_message
 from utils.logger import setup_logger
-from utils.database import init_db, StudentContact, FailedSync
+from utils.database import init_db, StudentContact, FailedSync, get_student_contact, resolve_school_id
 from config import Config
 import datetime
 from flask import current_app
@@ -19,6 +19,7 @@ def check_new_payments(student_id, term, phone_number=None, session=None, test_m
         owns_session = True
 
     try:
+        school_id = resolve_school_id()
         client = SMSClient()
         logger.debug(f"Processing payment check for {student_id} (test_mode={test_mode})")
 
@@ -31,7 +32,7 @@ def check_new_payments(student_id, term, phone_number=None, session=None, test_m
             return {"error": f"Term {term} has ended"}, 400
 
         # Get contact and cached balance
-        contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+        contact = get_student_contact(session, student_id, school_id=school_id)
         if contact:
             phone_number = contact.preferred_phone_number or contact.student_mobile
             fullname = f"{contact.firstname} {contact.lastname}".strip() if contact.firstname and contact.lastname else "Parent/Guardian"
@@ -47,7 +48,7 @@ def check_new_payments(student_id, term, phone_number=None, session=None, test_m
                 profile = client.get_student_profile(student_id)
                 if not profile or "data" not in profile:
                     logger.error(f"No profile found for {student_id} in API")
-                    session.add(FailedSync(student_id=student_id, error="Profile not found in API"))
+                    session.add(FailedSync(school_id=school_id, student_id=student_id, error="Profile not found in API"))
                     session.commit()
                     return {"error": "Profile not found"}, 404
                 profile_data = profile["data"]
@@ -58,7 +59,7 @@ def check_new_payments(student_id, term, phone_number=None, session=None, test_m
 
                 if student_mobile == "nan" or not student_mobile:
                     logger.error(f"No valid student_mobile for {student_id}")
-                    session.add(FailedSync(student_id=student_id, error="No valid student_mobile"))
+                    session.add(FailedSync(school_id=school_id, student_id=student_id, error="No valid student_mobile"))
                     session.commit()
                     return {"error": "No valid student_mobile in profile"}, 400
 
@@ -73,6 +74,7 @@ def check_new_payments(student_id, term, phone_number=None, session=None, test_m
                 fullname = f"{firstname} {lastname}".strip() if firstname and lastname else "Parent/Guardian"
 
                 contact = StudentContact(
+                    school_id=school_id,
                     student_id=student_id,
                     firstname=firstname,
                     lastname=lastname,
@@ -93,7 +95,7 @@ def check_new_payments(student_id, term, phone_number=None, session=None, test_m
                 # Repeat profile processing logic
                 if not profile or "data" not in profile:
                     logger.error(f"No profile found for {student_id} in API after retry")
-                    session.add(FailedSync(student_id=student_id, error="Profile not found in API after retry"))
+                    session.add(FailedSync(school_id=school_id, student_id=student_id, error="Profile not found in API after retry"))
                     session.commit()
                     return {"error": "Profile not found after retry"}, 404
                 profile_data = profile["data"]
@@ -104,7 +106,7 @@ def check_new_payments(student_id, term, phone_number=None, session=None, test_m
 
                 if student_mobile == "nan" or not student_mobile:
                     logger.error(f"No valid student_mobile for {student_id}")
-                    session.add(FailedSync(student_id=student_id, error="No valid student_mobile"))
+                    session.add(FailedSync(school_id=school_id, student_id=student_id, error="No valid student_mobile"))
                     session.commit()
                     return {"error": "No valid student_mobile in profile"}, 400
 
@@ -119,6 +121,7 @@ def check_new_payments(student_id, term, phone_number=None, session=None, test_m
                 fullname = f"{firstname} {lastname}".strip() if firstname and lastname else "Parent/Guardian"
 
                 contact = StudentContact(
+                    school_id=school_id,
                     student_id=student_id,
                     firstname=firstname,
                     lastname=lastname,
@@ -134,13 +137,13 @@ def check_new_payments(student_id, term, phone_number=None, session=None, test_m
                 logger.info(f"Cached contact for {student_id}: {phone_number}")
             except Exception as e:
                 logger.error(f"Failed to fetch profile for {student_id}: {str(e)}")
-                session.add(FailedSync(student_id=student_id, error=f"Failed to fetch profile: {str(e)}"))
+                session.add(FailedSync(school_id=school_id, student_id=student_id, error=f"Failed to fetch profile: {str(e)}"))
                 session.commit()
                 return {"error": f"Failed to fetch profile: {str(e)}"}, 500
 
         if not phone_number:
             logger.error(f"No phone number available for {student_id}")
-            session.add(FailedSync(student_id=student_id, error="No phone number available"))
+            session.add(FailedSync(school_id=school_id, student_id=student_id, error="No phone number available"))
             session.commit()
             return {"error": "Phone number required"}, 400
 

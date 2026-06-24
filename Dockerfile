@@ -18,5 +18,8 @@ RUN pip install -r requirements.txt --no-cache-dir
 # Copy application code
 COPY src/ .
 
+# Copy templates directory
+COPY templates/ templates/
+
 # Set the CMD to your handler
 CMD ["webhook_handler.lambda_handler"]

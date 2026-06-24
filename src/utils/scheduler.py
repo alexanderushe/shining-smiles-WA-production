@@ -10,7 +10,7 @@ from services.reminder_service import (
 )
 from services.payment_service import check_new_payments
 from utils.logger import setup_logger
-from utils.database import init_db, StudentContact
+from utils.database import init_db, StudentContact, get_student_contact
 from api.sms_client import SMSClient
 from config import Config
 
@@ -86,7 +86,7 @@ def check_all_payments():
             balance = student.get("outstanding_balance", 0)
 
             try:
-                contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+                contact = get_student_contact(session, student_id)  # tenant-scoped
                 if not contact:
                     profile = client.get_student_profile(student_id)
                     if profile and "data" in profile:
@@ -118,7 +118,7 @@ def check_all_payments():
         for batch in batches:
             for student_id in batch:
                 try:
-                    contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+                    contact = get_student_contact(session, student_id)  # tenant-scoped
 
                     if contact and contact.last_updated > datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1):
                         if contact.outstanding_balance is not None and contact.outstanding_balance <= 0:
