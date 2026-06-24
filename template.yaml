@@ -54,26 +54,7 @@ Resources:
       Principal: events.amazonaws.com
       SourceArn: !GetAtt ReminderRule.Arn
 
-  # 3. Daily Profile Sync (2:00 AM CAT / 00:00 UTC)
-  ProfileSyncRule:
-    Type: AWS::Events::Rule
-    Properties:
-      Name: DailyProfileSync
-      Description: Sync student profiles daily at 00:00 UTC
-      ScheduleExpression: cron(0 0 * * ? *)
-      State: ENABLED
-      Targets:
-        - Arn: !Ref ExistingFunctionArn
-          Id: ProfileSyncTarget
-          Input: '{"source": "aws.events", "action": "sync_profiles"}'
-
-  ProfileSyncPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !Ref ExistingFunctionArn
-      Principal: events.amazonaws.com
-      SourceArn: !GetAtt ProfileSyncRule.Arn
+  # W2.4: Daily Profile Sync REMOVED — SaaS is the source of truth (bot queries live).
 
   # 4. Hourly Health Check (Canary)
   HealthCheckRule:

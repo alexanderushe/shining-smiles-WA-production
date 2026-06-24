@@ -83,24 +83,80 @@ def generate_transport_pass_route():
 def verify_transport_pass_route():
     """Verify a transport pass."""
     logger.debug(f"Received request for /verify-transport-pass with args: {request.args}")
-    
+
     pass_id = request.args.get("pass_id")
     whatsapp_number = request.args.get("whatsapp_number")
-    
+
     if not pass_id or not whatsapp_number:
         logger.error(
             f"Missing required parameters: pass_id={pass_id}, whatsapp_number={whatsapp_number}"
         )
-        return jsonify({"error": "pass_id and whatsapp_number are required"}), 400
-    
+        # Render error page for missing parameters
+        try:
+            from flask import render_template
+            return render_template(
+                'error.html',
+                error_title="Missing Parameters",
+                error_message="pass_id and whatsapp_number are required"
+            ), 400
+        except:
+            return jsonify({"error": "pass_id and whatsapp_number are required"}), 400
+
     try:
         result, status_code = verify_transport_pass(pass_id, whatsapp_number)
-        return jsonify(result), status_code
+
+        # Render HTML template instead of returning JSON
+        try:
+            from flask import render_template
+
+            # Prepare template data
+            if status_code == 200 and result.get("status") == "valid":
+                # Valid transport pass
+                return render_template(
+                    'verify_transport_pass.html',
+                    status='valid',
+                    student_name=result.get('student_name', 'Unknown'),
+                    student_id=result.get('student_id', 'N/A'),
+                    route=result.get('route', 'N/A'),
+                    amount_paid=f"{result.get('amount_paid', 0):.2f}",
+                    issued_date=result.get('issued_date', 'N/A'),
+                    expiry_date=result.get('expiry_date', 'N/A'),
+                    registered_number=result.get('registered_number', 'N/A'),
+                    warning=result.get('warning')
+                ), 200
+            else:
+                # Invalid or expired transport pass
+                error_message = result.get('error', 'Transport pass is invalid or expired')
+                return render_template(
+                    'verify_transport_pass.html',
+                    status='invalid',
+                    student_name='N/A',
+                    student_id='N/A',
+                    route='N/A',
+                    amount_paid='0.00',
+                    issued_date='N/A',
+                    expiry_date='N/A',
+                    registered_number='N/A',
+                    warning=error_message
+                ), status_code
+        except Exception as template_error:
+            logger.warning(f"Failed to render template, falling back to JSON: {template_error}")
+            return jsonify(result), status_code
+
     except Exception as e:
         logger.error(
             f"Error verifying transport pass: {str(e)}\\n{traceback.format_exc()}"
         )
-        return jsonify({"error": f"Failed to verify transport pass: {str(e)}"}), 500
+        # Try to render error page
+        try:
+            from flask import render_template
+            return render_template(
+                'error.html',
+                error_title="Verification Error",
+                error_message=f"Failed to verify transport pass: {str(e)}"
+            ), 500
+        except:
+            return jsonify({"error": f"Failed to verify transport pass: {str(e)}"}), 500
 
 
 @transport_pass_bp.route("/student-transport-passes", methods=["GET"])

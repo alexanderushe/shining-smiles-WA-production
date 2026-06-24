@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from api.sms_client import SMSClient
 from utils.whatsapp import send_whatsapp_message
 from utils.logger import setup_logger
-from utils.database import init_db, StudentContact, UserState
+from utils.database import init_db, StudentContact, UserState, get_student_contact, get_user_state, resolve_school_id
 from services.reminder_logic import should_send_reminder, generate_reminder_message
 from config import get_config
 
@@ -23,10 +23,11 @@ def sanitize_phone_number(phone):
     return str(phone).strip()
 
 
-def update_or_create_contact(session, student_id, profile_data, balance):
+def update_or_create_contact(session, student_id, profile_data, balance, school_id=None):
     """Update or create a StudentContact record, avoiding duplicates."""
     try:
-        contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+        school_id = resolve_school_id(school_id)
+        contact = get_student_contact(session, student_id, school_id=school_id)
         firstname = profile_data.get("firstname")
         lastname = profile_data.get("lastname")
         student_mobile = sanitize_phone_number(profile_data.get("student_mobile"))
@@ -64,6 +65,7 @@ def update_or_create_contact(session, student_id, profile_data, balance):
         else:
             # Create new contact
             contact = StudentContact(
+                school_id=school_id,
                 student_id=student_id,
                 firstname=firstname,
                 lastname=lastname,
@@ -83,7 +85,8 @@ def update_or_create_contact(session, student_id, profile_data, balance):
     except IntegrityError as e:
         logger.error(f"❌ IntegrityError for {student_id}: {str(e)}")
         session.rollback()
-        contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+        school_id = resolve_school_id()
+        contact = get_student_contact(session, student_id, school_id=school_id)
         return contact if contact else None
 
     except Exception as e:
@@ -111,7 +114,7 @@ def send_balance_reminders(student_id, term, phone_number=None, session=None):
             close_session = True
 
         logger.debug(f"Database session initialized for {student_id}: {session}")
-        contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+        contact = get_student_contact(session, student_id)  # tenant-scoped
 
         if contact and contact.last_updated > datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1):
             phone_number = contact.preferred_phone_number
@@ -133,7 +136,7 @@ def send_balance_reminders(student_id, term, phone_number=None, session=None):
                     cached_balance = student["outstanding_balance"]
                     break
 
-            contact = update_or_create_contact(session, student_id, profile_data, cached_balance)
+            contact = update_or_create_contact(session, student_id, profile_data, cached_balance, school_id=school_id)
             if not contact:
                 logger.warning(f"Skipping {student_id} due to missing phone numbers")
                 return {"error": "No valid contact info"}
@@ -149,7 +152,7 @@ def send_balance_reminders(student_id, term, phone_number=None, session=None):
             logger.info(f"No outstanding balance for {student_id}")
             return {"status": f"No outstanding balance for {student_id}"}
 
-        user_state = session.query(UserState).filter_by(phone_number=phone_number).first()
+        user_state = get_user_state(session, phone_number, school_id=school_id)
         if not should_send_reminder(user_state, term):
             logger.info(f"Skipping reminder for {student_id}: throttled")
             return {"status": "Reminder skipped due to throttling"}
@@ -183,6 +186,7 @@ def send_balance_reminders(student_id, term, phone_number=None, session=None):
                 user_state.reminder_count = (user_state.reminder_count or 0) + 1
             else:
                 user_state = UserState(
+                    school_id=school_id,
                     phone_number=phone_number,
                     state="reminder_sent",
                     student_id=student_id,

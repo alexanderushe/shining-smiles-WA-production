@@ -7,7 +7,9 @@ Base = declarative_base()
 
 class StudentContact(Base):
     __tablename__ = 'student_contacts'
-    student_id = Column(String, primary_key=True)
+    id = Column(Integer, primary_key=True)
+    school_id = Column(String, nullable=False, default='default')
+    student_id = Column(String, nullable=False)
     firstname = Column(String)
     lastname = Column(String)
     email = Column(String)
@@ -20,6 +22,7 @@ class StudentContact(Base):
 
 class GatePass(Base):
     __tablename__ = 'gate_passes'
+    school_id = Column(String, nullable=False, default='default')
     pass_id = Column(String, primary_key=True)
     student_id = Column(String)
     issued_date = Column(DateTime)
@@ -32,6 +35,7 @@ class GatePass(Base):
 
 class UserState(Base):
     __tablename__ = 'user_states'
+    school_id = Column(String, primary_key=True, default='default')
     phone_number = Column(String, primary_key=True)
     state = Column(String, default='main_menu')
     student_id = Column(String)
@@ -63,14 +67,26 @@ class TransportPass(Base):
 class FailedSync(Base):
     __tablename__ = 'failed_syncs'
     id = Column(Integer, primary_key=True)
+    school_id = Column(String, nullable=False, default='default')
     student_id = Column(String)
     error = Column(String)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
+class TransportPassRequestLog(Base):
+    __tablename__ = 'transport_pass_request_log'
+    id = Column(Integer, primary_key=True)
+    school_id = Column(String, nullable=False, default='default')
+    student_id = Column(String(20), nullable=False)
+    week_start_date = Column(DateTime, nullable=False)
+    request_count = Column(Integer, default=1)
+    last_request_date = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
 class Invoice(Base):
     __tablename__ = 'invoices'
     id = Column(Integer, primary_key=True)
-    invoice_number = Column(String(50), unique=True, nullable=False)
+    school_id = Column(String, nullable=False, default='default')
+    invoice_number = Column(String(50), nullable=False)
     student_id = Column(String(20), nullable=False)
     term = Column(String(10), nullable=False)
     issued_date = Column(DateTime, nullable=False)

@@ -28,13 +28,15 @@ print("🎯 DEBUG: All imports successful!")
 
 # Core imports (relative for Lambda bundle)
 try:
-    from utils.database import init_db, StudentContact, UserState
+    from utils.database import init_db, StudentContact, UserState, find_contacts_by_phone, get_user_state, resolve_school_id
     from utils.whatsapp import send_whatsapp_message
     from utils.logger import setup_logger
     from api.sms_client import SMSClient, RateLimitException
     from utils.ai_client import generate_ai_response
     from config import get_config
+    from services.reminder_service import update_or_create_contact
     from services.gatepass_service import generate_gatepass
+    from utils.tenant_context import get_current_tenant, reset_current_tenant, resolve_tenant_config, set_current_tenant
     print("🎯 DEBUG: All custom imports successful!")
 except ImportError as e:
     print(f"🎯 DEBUG: Import error: {e}")
@@ -57,6 +59,13 @@ logger = setup_logger(__name__) if 'setup_logger' in locals() else logger
 config = get_config() if 'get_config' in locals() else config
 
 print("🎯 DEBUG: Logger and config setup complete!")
+
+def _cloud_credentials():
+    tenant = get_current_tenant() if 'get_current_tenant' in globals() else {}
+    token = tenant.get("whatsapp_cloud_api_token") or os.getenv("WHATSAPP_CLOUD_API_TOKEN")
+    phone_number_id = tenant.get("whatsapp_cloud_number") or tenant.get("phone_number_id") or os.getenv("WHATSAPP_CLOUD_NUMBER")
+    return tenant, token, phone_number_id
+
 
 def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, ai_response_function, request_id):
     """
@@ -127,14 +136,14 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
             return "How can I assist you today? Reply 'menu' for options or ask me anything about the school."
 
     # Database is available - use full logic
-    contacts = session.query(StudentContact).filter((StudentContact.student_mobile == whatsapp_number) |
-                                                    (StudentContact.guardian_mobile_number == whatsapp_number) |
-                                                    (StudentContact.preferred_phone_number == whatsapp_number)).all()
+    school_id = resolve_school_id()
+    contacts = find_contacts_by_phone(session, whatsapp_number, school_id=school_id)
 
-    user_state = session.query(UserState).filter_by(phone_number=whatsapp_number).first()
+    user_state = get_user_state(session, whatsapp_number, school_id=school_id)
 
     if not user_state:
         user_state = UserState(
+            school_id=school_id,
             phone_number=whatsapp_number,
             state="main_menu",
             query_count=0,
@@ -155,10 +164,43 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
         if user_state.query_count >= 5:
             return f"⚠️ *Daily query limit reached.* Please try again tomorrow or contact _admin@shiningsmilescollege.ac.zw_.\n{unregistered_prompt}"
 
-    # Query all contacts associated with the phone number
-    contacts = session.query(StudentContact).filter((StudentContact.student_mobile == whatsapp_number) |
-                                                    (StudentContact.guardian_mobile_number == whatsapp_number) |
-                                                    (StudentContact.preferred_phone_number == whatsapp_number)).all()
+    # Query all contacts associated with the phone number. If the local cache is
+    # cold post-W2.4, fall back to the live SaaS phone resolver and hydrate cache.
+    contacts = find_contacts_by_phone(session, whatsapp_number, school_id=school_id)
+    if not contacts:
+        try:
+            resolved = sms_client.resolve_by_phone(whatsapp_number)
+            resolved_students = resolved.get("students", []) if isinstance(resolved, dict) else []
+            if resolved_students:
+                logger.info(
+                    f"Resolved {len(resolved_students)} student(s) from SaaS for {whatsapp_number}",
+                    extra={"request_id": request_id, "school_id": school_id},
+                )
+                for student in resolved_students:
+                    student_id = student.get("student_id")
+                    if not student_id:
+                        continue
+                    profile = sms_client.get_student_profile(student_id)
+                    if not profile or "data" not in profile:
+                        logger.warning(
+                            f"Profile fetch failed after phone resolve for {student_id}",
+                            extra={"request_id": request_id, "school_id": school_id},
+                        )
+                        continue
+                    balance = float(student.get("outstanding_balance") or 0)
+                    update_or_create_contact(
+                        session,
+                        student_id,
+                        profile["data"],
+                        balance,
+                        school_id=school_id,
+                    )
+                contacts = find_contacts_by_phone(session, whatsapp_number, school_id=school_id)
+        except Exception as resolve_error:
+            logger.error(
+                f"Phone resolve fallback failed for {whatsapp_number}: {resolve_error}",
+                extra={"request_id": request_id, "school_id": school_id},
+            )
     
     # BUGFIX: If contacts exist but user_state is "unregistered_menu", reset to "main_menu"
     # This prevents registered users from being shown unregistered menu
@@ -617,9 +659,12 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                     return f"⚠️ *Hi {fullname},*\n*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
 
             elif message_body in ["4", "invoice", "request invoice"]:
-                # Auto-detect current term
-                term = config.get_current_term() or config.get_most_recent_completed_term()
-                
+                # Between terms: invoice for the upcoming term; otherwise current term
+                if config.is_between_terms():
+                    term = config.get_next_term() or config.get_most_recent_completed_term()
+                else:
+                    term = config.get_current_term()
+
                 if not term:
                     user_state.state = "main_menu"
                     user_state.last_updated = current_time
@@ -724,19 +769,15 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                 # Transport Pass Handler
                 try:
                     logger.debug(f"Attempting transport passes for student_ids: {student_ids}, term: {default_term}", extra=extra_log)
-                    
+
                     # Check if in active term
-                    if not default_term:
-                        next_term = min(
-                            (term for term, start in config.TERM_START_DATES.items() if start.date() > current_date),
-                            key=lambda t: config.TERM_START_DATES[t].date(),
-                            default=None
-                        )
+                    if config.is_between_terms():
+                        next_term = config.get_next_term()
                         next_term_date = config.TERM_START_DATES[next_term].date().strftime("%d %B %Y") if next_term else "a future date"
                         user_state.state = "main_menu"
                         user_state.last_updated = current_time
                         session.commit()
-                        return f"📅 *Hi {fullname},*\nTransport passes are only issued during active school terms. Schools reopen on {next_term_date} for Term {next_term or ''}. Please try again then.\n{menu_text}"
+                        return f"📅 *Hi {fullname},*\nTransport passes are only issued during active school terms. Schools reopen on {next_term_date} for Term {next_term or '2'}. Please try again then.\n{menu_text}"
                     
                     from services.transport_pass_service import parse_and_validate_transport_fee, generate_transport_pass
                     
@@ -1319,7 +1360,9 @@ def process_cloud_api_message(message, metadata):
     session = None
     try:
         request_id = str(uuid.uuid4())
-        print("🎯 DEBUG: Initializing database...")
+        tenant_config = resolve_tenant_config(metadata) if "resolve_tenant_config" in globals() else {}
+        tenant_token = set_current_tenant(tenant_config) if "set_current_tenant" in globals() else None
+        print(f"🎯 DEBUG: Initializing database for school {tenant_config.get('school_id')} on phone_number_id {tenant_config.get('phone_number_id')}...")
         
         # Try to initialize database, but continue even if it fails
         try:
@@ -1334,7 +1377,7 @@ def process_cloud_api_message(message, metadata):
         # Test SMSClient separately
         try:
             print("🎯 DEBUG: Testing SMSClient only...")
-            sms_client = SMSClient(request_id=request_id, use_cloud_api=True)
+            sms_client = SMSClient(request_id=request_id, use_cloud_api=True, tenant_config=tenant_config)
             print("🎯 DEBUG: SMSClient succeeded")
         except Exception as sms_error:
             print(f"🎯 DEBUG: SMSClient failed: {sms_error}")
@@ -1352,7 +1395,7 @@ def process_cloud_api_message(message, metadata):
             print(f"🎯 DEBUG: Unsupported message type: {message_type}")
             return
 
-        print(f"🎯 DEBUG: Processing message from {from_number}: '{message_body}'")
+        print(f"🎯 DEBUG: Processing message from {from_number}: '{message_body}' for school {tenant_config.get('school_id')} via number {tenant_config.get('phone_number_id')}")
         
         # Provide instant feedback to user
         try:
@@ -1391,6 +1434,9 @@ def process_cloud_api_message(message, metadata):
     except Exception as e:
         print(f"🎯 DEBUG: ERROR in process_cloud_api_message: {e}")
         traceback.print_exc()
+    finally:
+        if 'tenant_token' in locals() and tenant_token is not None and 'reset_current_tenant' in globals():
+            reset_current_tenant(tenant_token)
         if session:
             session.close()
     
@@ -1400,8 +1446,7 @@ def mark_message_as_read(message_id):
     import os
     import requests
     
-    token = os.getenv("WHATSAPP_CLOUD_API_TOKEN")
-    phone_number_id = os.getenv("WHATSAPP_CLOUD_NUMBER")
+    _tenant, token, phone_number_id = _cloud_credentials()
     
     if not token or not phone_number_id:
         print("⚠️ Cannot mark as read: Missing credentials")
@@ -1432,8 +1477,7 @@ def react_to_message(to_number, message_id, emoji="⏳"):
     import os
     import requests
     
-    token = os.getenv("WHATSAPP_CLOUD_API_TOKEN")
-    phone_number_id = os.getenv("WHATSAPP_CLOUD_NUMBER")
+    _tenant, token, phone_number_id = _cloud_credentials()
     
     if not token or not phone_number_id:
         print("⚠️ Cannot react: Missing credentials")
@@ -1469,8 +1513,7 @@ def send_whatsapp_message_real(to: str, message: str):
     import os
     import requests
 
-    token = os.getenv("WHATSAPP_CLOUD_API_TOKEN")
-    phone_number_id = os.getenv("WHATSAPP_CLOUD_NUMBER")
+    _tenant, token, phone_number_id = _cloud_credentials()
     
     # FIX: Add safety checks
     if token:
@@ -1528,6 +1571,11 @@ def lambda_handler(event, context):
                 return {"statusCode": 200, "body": "Reminders sent"}
                 
             elif action == "sync_profiles":
+                # W2.4: nightly profile sync RETIRED. The SaaS is the source of
+                # truth and the bot queries it live, so there is nothing to sync.
+                logger.info("sync_profiles action is deprecated (SaaS is source of truth); no-op")
+                return {"statusCode": 200, "body": "sync_profiles deprecated: SaaS is source of truth"}
+                # --- dead code below, removed when the sync module is deleted ---
                 from services.profile_sync_service import sync_student_profiles
                 import boto3
                 
@@ -1939,23 +1987,11 @@ def lambda_handler(event, context):
                 if admin_key != expected_key:
                     return {'statusCode': 401, 'body': json.dumps({"error": "Unauthorized"})}
                 
-                # Trigger Sync asynchronously via Lambda invoke (same as scheduler)
-                import boto3
-                lambda_client = boto3.client('lambda')
-                payload = {
-                    "source": "aws.events",
-                    "action": "sync_profiles"
-                }
-                lambda_client.invoke(
-                    FunctionName=context.function_name,
-                    InvocationType='Event', # Async
-                    Payload=json.dumps(payload)
-                )
-                
+                # W2.4: profile sync retired — SaaS is the source of truth.
                 return {
-                    'statusCode': 200, 
+                    'statusCode': 410,
                     'headers': {'Content-Type': 'application/json'},
-                    'body': json.dumps({"status": "started", "message": "Sync job triggered in background"})
+                    'body': json.dumps({"status": "deprecated", "message": "Profile sync retired; SaaS is the source of truth"})
                 }
             except Exception as e:
                 return {'statusCode': 500, 'body': json.dumps({"error": str(e)})}

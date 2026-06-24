@@ -5,16 +5,7 @@ def init_scheduler():
         scheduler = BackgroundScheduler({
             'apscheduler.job_defaults.max_instances': 1,
         })
-        # Daily profile sync at 2 AM
-        scheduler.add_job(
-            sync_student_profiles,
-            trigger="cron",
-            hour=2,
-            minute=0,
-            id='sync_student_profiles',
-            replace_existing=True,
-            args=[None, 24]  # No record limit, 24-hour cache
-        )
+        # W2.4: daily profile sync removed — SaaS is the source of truth.
         # Weekly reminders for all students in debt (Monday at 9 AM)
         scheduler.add_job(
             send_all_reminders,

@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 import requests
 import traceback
 
-from utils.database import init_db, StudentContact, Invoice
+from utils.database import init_db, StudentContact, Invoice, resolve_school_id, school_scoped_query
 from utils.whatsapp import send_whatsapp_message
 from utils.logger import setup_logger
 from api.sms_client import SMSClient
@@ -73,7 +73,7 @@ def is_hot_meals_mandatory(grade):
     return False
 
 
-def generate_invoice_number(student_id, term, sequence=1):
+def generate_invoice_number(student_id, term, sequence=1, school_id=None):
     """
     Generate a unique invoice number.
     
@@ -88,7 +88,8 @@ def generate_invoice_number(student_id, term, sequence=1):
     Returns:
         str: Formatted invoice number
     """
-    return f"INV-{term}-{student_id}-{sequence:03d}"
+    school_prefix = (school_id or "default").replace(" ", "-").upper()
+    return f"INV-{school_prefix}-{term}-{student_id}-{sequence:03d}"
 
 
 def get_invoice_line_items(student_id, term, sms_client, extra_log):
@@ -510,7 +511,7 @@ def create_invoice_pdf(invoice_data, output_path, extra_log):
         raise
 
 
-def upload_invoice_to_s3(pdf_path, invoice_number, extra_log):
+def upload_invoice_to_s3(pdf_path, invoice_number, extra_log, school_id=None):
     """
     Upload invoice PDF to S3 bucket.
     
@@ -522,7 +523,8 @@ def upload_invoice_to_s3(pdf_path, invoice_number, extra_log):
     Returns:
         str: S3 key (path in bucket)
     """
-    s3_key = f"invoices/{invoice_number}.pdf"
+    school_prefix = (school_id or resolve_school_id()).replace(" ", "-").lower()
+    s3_key = f"invoices/{school_prefix}/{invoice_number}.pdf"
     
     try:
         s3.upload_file(
@@ -556,54 +558,96 @@ def generate_invoice(student_id, term, whatsapp_number, request_id=None):
         Exception: If PDF generation or upload fails
     """
     session = init_db()
-    extra_log = {"request_id": request_id, "student_id": student_id, "term": term}
+    school_id = resolve_school_id()
+    extra_log = {"request_id": request_id, "student_id": student_id, "term": term, "school_id": school_id}
     
     try:
         logger.info(f"Generating invoice for {student_id}, term {term}", extra=extra_log)
         
         # Initialize API client
         sms_client = SMSClient(request_id=request_id)
-        
-        # Check if invoice already exists for this student/term
-        existing_invoice = session.query(Invoice).filter_by(
-            student_id=student_id,
-            term=term
-        ).first()
-        
-        if existing_invoice:
-            # Re-send existing invoice
-            logger.info(f"Re-sending existing invoice: {existing_invoice.invoice_number}", extra=extra_log)
-            
-            # Generate presigned URL
-            pdf_url = s3.generate_presigned_url(
-                'get_object',
-                Params={'Bucket': bucket_name, 'Key': existing_invoice.pdf_path},
-                ExpiresIn=3600  # 1 hour
-            )
-            
-            return {
-                "invoice_number": existing_invoice.invoice_number,
-                "pdf_url": pdf_url,
-                "total_amount": existing_invoice.total_amount,
-                "issued_date": existing_invoice.issued_date.strftime("%d %B %Y"),
-                "due_date": existing_invoice.due_date.strftime("%d %B %Y"),
-                "is_resend": True
-            }, 200
-        
-        # Fetch invoice data
+
+        # Fetch current invoice data to check if fees have changed
         try:
             invoice_info = get_invoice_line_items(student_id, term, sms_client, extra_log)
         except Exception as e:
             logger.error(f"Failed to fetch invoice data: {e}", extra=extra_log)
             raise ValueError("Unable to retrieve fee information from school system")
-        
+
         # Validate that fees exist
         if not invoice_info['items']:
             raise ValueError("No fees recorded for this student and term")
-        
+
+        current_total_billed = invoice_info['total_billed']
+
+        # Check if invoice already exists for this student/term
+        existing_invoice = school_scoped_query(session, Invoice, school_id).filter_by(
+            student_id=student_id,
+            term=term
+        ).first()
+
+        if existing_invoice:
+            # Check if fees have changed since the last invoice
+            if abs(existing_invoice.total_amount - current_total_billed) < 0.01:
+                # Fees haven't changed - re-send existing invoice
+                logger.info(f"Re-sending existing invoice {existing_invoice.invoice_number} (fees unchanged: ${current_total_billed:.2f})", extra=extra_log)
+
+                # Generate presigned URL
+                pdf_url = s3.generate_presigned_url(
+                    'get_object',
+                    Params={'Bucket': bucket_name, 'Key': existing_invoice.pdf_path},
+                    ExpiresIn=3600  # 1 hour
+                )
+
+                return {
+                    "invoice_number": existing_invoice.invoice_number,
+                    "pdf_url": pdf_url,
+                    "total_amount": existing_invoice.total_amount,
+                    "issued_date": existing_invoice.issued_date.strftime("%d %B %Y"),
+                    "due_date": existing_invoice.due_date.strftime("%d %B %Y"),
+                    "is_resend": True
+                }, 200
+            else:
+                # Fees have changed - generate a new revised invoice with incremented sequence
+                logger.info(f"Fees changed from ${existing_invoice.total_amount:.2f} to ${current_total_billed:.2f}. Generating revised invoice.", extra=extra_log)
+
+                # Extract sequence number from existing invoice and increment
+                # Format: INV-2026-1-SSC20258052-001 -> sequence = 1
+                try:
+                    parts = existing_invoice.invoice_number.split('-')
+                    old_sequence = int(parts[-1])
+                    sequence = old_sequence + 1
+                except (IndexError, ValueError):
+                    sequence = 2  # Default to 2 if we can't parse
+                    logger.warning(f"Could not parse sequence from {existing_invoice.invoice_number}, defaulting to 2", extra=extra_log)
+        else:
+            # No existing invoice - create first one
+            sequence = 1
+
         # Generate invoice number
-        sequence = 1
-        invoice_number = generate_invoice_number(student_id, term, sequence)
+        invoice_number = generate_invoice_number(student_id, term, sequence, school_id=school_id)
+        
+        # Check if this invoice number already exists (prevent duplicate key error)
+        duplicate_check = school_scoped_query(session, Invoice, school_id).filter_by(invoice_number=invoice_number).first()
+        if duplicate_check:
+            # Invoice with this number already exists - resend it
+            logger.info(f"Invoice {invoice_number} already exists, resending", extra=extra_log)
+            
+            # Generate presigned URL
+            pdf_url = s3.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': bucket_name, 'Key': duplicate_check.pdf_path},
+                ExpiresIn=3600  # 1 hour
+            )
+            
+            return {
+                "invoice_number": duplicate_check.invoice_number,
+                "pdf_url": pdf_url,
+                "total_amount": duplicate_check.total_amount,
+                "issued_date": duplicate_check.issued_date.strftime("%d %B %Y"),
+                "due_date": duplicate_check.due_date.strftime("%d %B %Y"),
+                "is_resend": True
+            }, 200
         
         # Calculate dates
         issued_date = datetime.now(timezone.utc)
@@ -630,7 +674,7 @@ def generate_invoice(student_id, term, whatsapp_number, request_id=None):
         create_invoice_pdf(pdf_data, temp_pdf_path, extra_log)
         
         # Upload to S3
-        s3_key = upload_invoice_to_s3(temp_pdf_path, invoice_number, extra_log)
+        s3_key = upload_invoice_to_s3(temp_pdf_path, invoice_number, extra_log, school_id=school_id)
         
         # Clean up temporary file
         try:
@@ -647,6 +691,7 @@ def generate_invoice(student_id, term, whatsapp_number, request_id=None):
         
         # Save invoice record to database
         new_invoice = Invoice(
+            school_id=school_id,
             invoice_number=invoice_number,
             student_id=student_id,
             term=term,
@@ -680,4 +725,6 @@ def generate_invoice(student_id, term, whatsapp_number, request_id=None):
         logger.error(f"Unexpected error in invoice generation: {str(e)}\n{traceback.format_exc()}", extra=extra_log)
         return {"error": f"Internal server error: {str(e)}"}, 500
     finally:
-        session.remove()
+        # DO NOT remove the session - it's a scoped_session shared with webhook_handler
+        # Removing it here would close the parent session prematurely
+        pass

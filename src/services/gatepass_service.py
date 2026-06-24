@@ -19,7 +19,7 @@ except ImportError:
     request = None
     jsonify = None
 
-from utils.database import init_db, StudentContact, GatePass, GatePassScan, GatePassRequestLog
+from utils.database import init_db, StudentContact, GatePass, GatePassScan, GatePassRequestLog, get_student_contact, resolve_school_id, school_scoped_query
 from utils.whatsapp import send_whatsapp_message
 from utils.logger import setup_logger
 from api.sms_client import SMSClient
@@ -60,7 +60,7 @@ def calculate_expiry_date(term, payment_percentage, payment_date=None):
         logger.warning(f"Payment percentage {payment_percentage}% below 50%; no gate pass issued.")
         return None
 
-def check_and_update_rate_limit(session, student_id, extra_log):
+def check_and_update_rate_limit(session, student_id, extra_log, school_id=None):
     """
     Check and update the weekly rate limit for gate pass requests.
     Returns a tuple: (request_count, tier)
@@ -72,13 +72,15 @@ def check_and_update_rate_limit(session, student_id, extra_log):
     week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     
     # Find or create log entry for this student+week
-    log_entry = session.query(GatePassRequestLog).filter(
+    school_id = resolve_school_id(school_id)
+    log_entry = school_scoped_query(session, GatePassRequestLog, school_id).filter(
         GatePassRequestLog.student_id == student_id,
         GatePassRequestLog.week_start_date == week_start
     ).first()
     
     if not log_entry:
         log_entry = GatePassRequestLog(
+            school_id=school_id,
             student_id=student_id,
             week_start_date=week_start,
             request_count=1,
@@ -112,7 +114,8 @@ def send_email_fallback(student_id, whatsapp_number, pass_id, expiry_date, s3_ke
     """Placeholder for sending gate pass via email (not implemented)."""
     try:
         session = init_db()
-        contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+        school_id = resolve_school_id()
+        contact = get_student_contact(session, student_id, school_id=school_id)
         if not contact or not contact.email:
             logger.error(f"No email found for student {student_id}", extra={"student_id": student_id})
             return False
@@ -140,7 +143,7 @@ def send_email_fallback(student_id, whatsapp_number, pass_id, expiry_date, s3_ke
     finally:
         session.remove()
 
-def fetch_and_create_student_contact(student_id, session, sms_client, extra_log):
+def fetch_and_create_student_contact(student_id, session, sms_client, extra_log, school_id=None):
     """
     JIT (Just-In-Time) profile sync: Fetch student profile from SMS API and create local database record.
     
@@ -204,7 +207,8 @@ def fetch_and_create_student_contact(student_id, session, sms_client, extra_log)
             return None, None, "No valid mobile number found (Student or Guardian)"
         
         # Check if student already exists (UPSERT logic)
-        contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+        school_id = resolve_school_id(school_id)
+        contact = get_student_contact(session, student_id, school_id=school_id)
         
         if contact:
             # Update existing record
@@ -219,6 +223,7 @@ def fetch_and_create_student_contact(student_id, session, sms_client, extra_log)
         else:
             # Create new record
             contact = StudentContact(
+                school_id=school_id,
                 student_id=student_id,
                 firstname=firstname,
                 lastname=lastname,
@@ -249,7 +254,8 @@ def fetch_and_create_student_contact(student_id, session, sms_client, extra_log)
 
 def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, requesting_whatsapp_number=None, skip_whatsapp=False):
     session = init_db()
-    extra_log = {"request_id": request_id, "student_id": student_id}
+    school_id = resolve_school_id()
+    extra_log = {"request_id": request_id, "student_id": student_id, "school_id": school_id}
     try:
         # Validate inputs
         if not student_id or not term:
@@ -274,12 +280,12 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
             logger.error(f"Invalid payment_amount: {payment_amount}", extra=extra_log)
             return {"error": "Payment amount cannot be negative"}, 400
 
-        contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+        contact = get_student_contact(session, student_id, school_id=school_id)
         if not contact:
             # JIT Sync: Student not in local DB, fetch from SMS API
             logger.info(f"Student {student_id} not in local DB, attempting JIT sync", extra=extra_log)
         sms_client = SMSClient(request_id=request_id, use_cloud_api=True)
-        contact, _, _ = fetch_and_create_student_contact(student_id, session, sms_client, extra_log)
+        contact, _, _ = fetch_and_create_student_contact(student_id, session, sms_client, extra_log, school_id=school_id)
         
         if not contact:
             logger.error(f"JIT sync failed for {student_id}", extra=extra_log)
@@ -311,7 +317,7 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
                 return {"error": f"Number {whatsapp_number} is not registered with WhatsApp. Please register or contact support."}, 400
 
             # Check rate limit (only for WhatsApp requests, not admin-generated)
-            request_count, tier = check_and_update_rate_limit(session, student_id, extra_log)
+            request_count, tier = check_and_update_rate_limit(session, student_id, extra_log, school_id=school_id)
             
             if tier == 'block':
                 logger.warning(f"Rate limit exceeded for {student_id}: {request_count} requests this week", extra=extra_log)
@@ -335,7 +341,7 @@ def generate_gatepass(student_id, term, payment_amount, total_fees, request_id, 
             return {"status": "No gate pass issued", "reason": "Payment below 50%"}, 200
 
         issued_date = datetime.now(timezone.utc)
-        existing_pass = session.query(GatePass).filter(
+        existing_pass = school_scoped_query(session, GatePass, school_id).filter(
             GatePass.student_id == student_id,
             GatePass.expiry_date >= issued_date
         ).first()
@@ -685,7 +691,8 @@ def verify_gatepass(pass_id, incoming_number, return_json=False):
             else:
                 return render_template_string("error.html", message="Missing pass ID or WhatsApp number"), 400
 
-        gate_pass = session.query(GatePass).filter_by(pass_id=pass_id).first()
+        school_id = resolve_school_id()
+        gate_pass = school_scoped_query(session, GatePass, school_id).filter_by(pass_id=pass_id).first()
         if not gate_pass:
             logger.error(f"Gate pass ID not found: {pass_id}", extra=extra_log)
             if return_json:
@@ -704,10 +711,11 @@ def verify_gatepass(pass_id, incoming_number, return_json=False):
             else:
                 return render_template_string("error.html", message="Gate pass expired"), 410
 
-        student = session.query(StudentContact).filter_by(student_id=gate_pass.student_id).first()
+        student = get_student_contact(session, gate_pass.student_id, school_id=school_id)
         student_name = f"{student.firstname or ''} {student.lastname or ''}".strip() if student else "Unknown"
 
         scan = GatePassScan(
+            school_id=school_id,
             pass_id=pass_id,
             scanned_at=datetime.now(timezone.utc),
             scanned_by_number=incoming_number,

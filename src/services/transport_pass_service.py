@@ -3,7 +3,7 @@ import re
 import uuid
 import boto3
 from botocore.client import Config
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import requests
 import traceback
 
@@ -14,7 +14,7 @@ except ImportError:
     request = None
     jsonify = None
 
-from utils.database import init_db, StudentContact, TransportPass
+from utils.database import init_db, StudentContact, TransportPass, TransportPassRequestLog, get_student_contact, resolve_school_id, school_scoped_query
 from utils.whatsapp import send_whatsapp_message
 from utils.logger import setup_logger
 from api.sms_client import SMSClient
@@ -31,6 +31,55 @@ s3 = boto3.client(
 )
 bucket_name = AppConfig.TRANSPORT_S3_BUCKET
 
+def check_and_update_transport_rate_limit(session, student_id, extra_log, school_id=None):
+    """
+    Check and update the weekly rate limit for transport pass requests.
+    Returns a tuple: (request_count, tier)
+    - request_count: Current number of requests this week (before incrementing)
+    - tier: 'pdf' (1-3), 'text' (4-5), or 'block' (6+)
+    """
+    now = datetime.now(timezone.utc)
+    # Get Monday of the current week
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # Find or create log entry for this student+week
+    school_id = resolve_school_id(school_id)
+    log_entry = school_scoped_query(session, TransportPassRequestLog, school_id).filter(
+        TransportPassRequestLog.student_id == student_id,
+        TransportPassRequestLog.week_start_date == week_start
+    ).first()
+    
+    if not log_entry:
+        log_entry = TransportPassRequestLog(
+            school_id=school_id,
+            student_id=student_id,
+            week_start_date=week_start,
+            request_count=1,
+            last_request_date=now
+        )
+        session.add(log_entry)
+        session.commit()
+        logger.info(f"Created new transport rate limit log for {student_id}, week {week_start.date()}", extra=extra_log)
+        return 1, 'pdf'
+    
+    current_count = log_entry.request_count
+    
+    # Determine tier before incrementing
+    if current_count < 3:
+        tier = 'pdf'
+    elif current_count < 5:
+        tier = 'text'
+    else:
+        tier = 'block'
+    
+    # Increment counter
+    log_entry.request_count += 1
+    log_entry.last_request_date = now
+    session.commit()
+    
+    logger.info(f"Transport rate limit check for {student_id}: {current_count + 1} requests this week, tier={tier}", extra=extra_log)
+    
+    return current_count + 1, tier
 
 def parse_and_validate_transport_fee(fee_type, amount):
     """
@@ -50,15 +99,32 @@ def parse_and_validate_transport_fee(fee_type, amount):
     else:
         return None  # Unknown route
     
-    # Extract service type
+    # Extract service type - first try explicit indicators
+    service_type = None
     if "2 way" in fee_type_normalized or "two way" in fee_type_normalized:
         service_type = "2_way"
     elif "1 way" in fee_type_normalized or "one way" in fee_type_normalized:
         service_type = "1_way"
     elif route_type == "cbd":
         service_type = "either_way"
-    else:
-        return None  # Unknown service
+    
+    # Fallback: Use amount to determine service type if not explicitly mentioned
+    if service_type is None:
+        # Get all possible service types for this route
+        route_config = AppConfig.TRANSPORT_ROUTES.get(route_type, {})
+        
+        # Try to match amount to a service type (with small tolerance for rounding)
+        for svc_type, svc_config in route_config.items():
+            if abs(amount - svc_config["price"]) < 0.01:
+                service_type = svc_type
+                break
+        
+        # If still no match, default to 2_way for local/chitungwiza
+        if service_type is None:
+            if route_type in ["local", "chitungwiza"]:
+                service_type = "2_way"  # Default assumption
+            else:
+                return None  # Unknown service for CBD (should not happen)
     
     # Get expected amount
     expected_amount = AppConfig.TRANSPORT_ROUTES[route_type][service_type]["price"]
@@ -88,7 +154,8 @@ def generate_transport_pass(student_id, term, route_type, service_type, amount_p
         (result_dict, status_code)
     """
     session = init_db()
-    extra_log = {"request_id": request_id, "student_id": student_id, "route": route_type, "service": service_type}
+    school_id = resolve_school_id()
+    extra_log = {"request_id": request_id, "student_id": student_id, "route": route_type, "service": service_type, "school_id": school_id}
     
     try:
         # Validate inputs
@@ -113,7 +180,7 @@ def generate_transport_pass(student_id, term, route_type, service_type, amount_p
             }, 402  # Payment Required
         
         # Get student contact
-        contact = session.query(StudentContact).filter_by(student_id=student_id).first()
+        contact = get_student_contact(session, student_id, school_id=school_id)
         if not contact:
             logger.error(f"Student {student_id} not found in database", extra=extra_log)
             return {"error": "Student not found"}, 404
@@ -126,8 +193,22 @@ def generate_transport_pass(student_id, term, route_type, service_type, amount_p
             logger.error(f"No valid WhatsApp number for {student_id}", extra=extra_log)
             return {"error": "No valid WhatsApp number found for this student"}, 400
         
+        # Check rate limit (only for WhatsApp requests, not admin-generated)
+        if not skip_whatsapp:
+            request_count, tier = check_and_update_transport_rate_limit(session, student_id, extra_log, school_id=school_id)
+            
+            if tier == 'block':
+                logger.warning(f"Rate limit exceeded for {student_id}: {request_count} requests this week", extra=extra_log)
+                return {
+                    "status": "Rate limit exceeded",
+                    "message": "You have reached the weekly limit for transport pass requests. Please use the pass sent previously or contact admin@shiningsmilescollege.ac.zw if you need assistance."
+                }, 429
+        else:
+            # For admin requests, use None tier to always send PDF
+            tier = None
+        
         # Check if transport pass already exists for this term and route
-        existing_pass = session.query(TransportPass).filter(
+        existing_pass = school_scoped_query(session, TransportPass, school_id).filter(
             TransportPass.student_id == student_id,
             TransportPass.term == term,
             TransportPass.route_type == route_type,
@@ -141,6 +222,31 @@ def generate_transport_pass(student_id, term, route_type, service_type, amount_p
             # Resend existing pass
             if not skip_whatsapp and existing_pass.pdf_path:
                 try:
+                    route_display = route_type.capitalize()
+                    service_display = service_type.replace("_", " ").title()
+                    
+                    # Tier 2: Send text-only (no PDF) to save bandwidth
+                    if tier == 'text':
+                        logger.info(f"Tier 2: Sending text-only transport pass details for {student_id}", extra=extra_log)
+                        message = (
+                            f"Dear {contact.firstname or 'Parent'} {contact.lastname or 'Guardian'},\n"
+                            f"You already have a valid transport pass.\n\n"
+                            f"📋 *Pass Details:*\n"
+                            f"Route: {route_display} - {service_display}\n"
+                            f"Valid until: {existing_pass.expiry_date.strftime('%Y-%m-%d')}\n\n"
+                            f"⚠️ *Note:* You've requested this pass multiple times this week. To save data, we're sending details only.\n"
+                            f"The PDF was sent with your previous request. If you need the PDF again, contact admin@shiningsmilescollege.ac.zw."
+                        )
+                        send_whatsapp_message(whatsapp_number, message)
+                        return {
+                            "status": "Transport pass valid (text-only sent)",
+                            "pass_id": existing_pass.pass_id,
+                            "expiry_date": existing_pass.expiry_date.isoformat(),
+                            "whatsapp_number": whatsapp_number,
+                            "tier": "text"
+                        }, 200
+                    
+                    # Tier 1: Send PDF as usual
                     expiry_seconds = 3600
                     presigned_url = s3.generate_presigned_url(
                         'get_object',
@@ -148,18 +254,15 @@ def generate_transport_pass(student_id, term, route_type, service_type, amount_p
                         ExpiresIn=expiry_seconds
                     )
                     
-                    route_display = route_type.capitalize()
-                    service_display = service_type.replace("_", " ").title()
-                    
                     message = (
-                        f"Dear {contact.firstname or 'Parent'} {contact.lastname or 'Guardian'},\\n"
-                        f"You already have a valid transport pass.\\n\\n"
-                        f"Route: {route_display} - {service_display}\\n"
-                        f"Valid until: {existing_pass.expiry_date.strftime('%Y-%m-%d')}\\n"
+                        f"Dear {contact.firstname or 'Parent'} {contact.lastname or 'Guardian'},\n"
+                        f"You already have a valid transport pass.\n\n"
+                        f"Route: {route_display} - {service_display}\n"
+                        f"Valid until: {existing_pass.expiry_date.strftime('%Y-%m-%d')}\n"
                         f"This pass is valid only for {whatsapp_number}."
                     )
                     
-                    send_whatsapp_message(whatsapp_number, message, media_url=presigned_url)
+                    send_whatsapp_message(whatsapp_number, message, media_url=presigned_url, filename=os.path.basename(existing_pass.pdf_path))
                     logger.info(f"Resent existing transport pass to {whatsapp_number}", extra=extra_log)
                 except Exception as e:
                     logger.error(f"Failed to resend transport pass: {str(e)}", extra=extra_log)
@@ -191,7 +294,7 @@ def generate_transport_pass(student_id, term, route_type, service_type, amount_p
         
         route_display = route_type.capitalize()
         service_display = service_type.replace("_", " ").title()
-        filename = f"transport_pass_{student_id_clean}_{route_type}_{service_type}.pdf"
+        filename = f"transportpass_{student_id_clean}_{first}_{last}.pdf"
         pdf_path = f"/tmp/{filename}"
         qr_path = f"/tmp/qr_{pass_id}.png"
         
@@ -304,6 +407,7 @@ def generate_transport_pass(student_id, term, route_type, service_type, amount_p
         
         # Save to database
         transport_pass = TransportPass(
+            school_id=school_id,
             pass_id=pass_id,
             student_id=student_id,
             term=term,
@@ -333,15 +437,15 @@ def generate_transport_pass(student_id, term, route_type, service_type, amount_p
                 )
                 
                 message = (
-                    f"Dear {contact.firstname or 'Parent'} {contact.lastname or 'Guardian'},\\n"
-                    f"Your transport pass for {student_id} is attached.\\n\\n"
-                    f"Route: {route_display} - {service_display}\\n"
-                    f"Pass ID: {pass_id}\\n"
-                    f"Valid until: {expiry_date.strftime('%Y-%m-%d')}\\n\\n"
+                    f"Dear {contact.firstname or 'Parent'} {contact.lastname or 'Guardian'},\n"
+                    f"Your transport pass for {student_id} is attached.\n\n"
+                    f"Route: {route_display} - {service_display}\n"
+                    f"Pass ID: {pass_id}\n"
+                    f"Valid until: {expiry_date.strftime('%Y-%m-%d')}\n\n"
                     f"This pass is valid only for {whatsapp_number}."
                 )
                 
-                whatsapp_response = send_whatsapp_message(whatsapp_number, message, media_url=presigned_url)
+                whatsapp_response = send_whatsapp_message(whatsapp_number, message, media_url=presigned_url, filename=os.path.basename(s3_key))
                 if whatsapp_response.get("status") != "sent":
                     logger.error(f"Failed to send WhatsApp message: {whatsapp_response.get('error')}", extra=extra_log)
                 else:
@@ -378,7 +482,8 @@ def verify_transport_pass(pass_id, whatsapp_number, return_json=True):
             logger.error("Missing pass_id or whatsapp_number", extra=extra_log)
             return {"error": "Missing pass ID or WhatsApp number"}, 400
         
-        transport_pass = session.query(TransportPass).filter_by(pass_id=pass_id).first()
+        school_id = resolve_school_id()
+        transport_pass = school_scoped_query(session, TransportPass, school_id).filter_by(pass_id=pass_id).first()
         if not transport_pass:
             logger.error(f"Transport pass not found: {pass_id}", extra=extra_log)
             return {"error": "Transport pass not found"}, 404
@@ -398,7 +503,7 @@ def verify_transport_pass(pass_id, whatsapp_number, return_json=True):
             return {"error": f"Transport pass is {transport_pass.status}"}, 403
         
         # Get student info
-        student = session.query(StudentContact).filter_by(student_id=transport_pass.student_id).first()
+        student = get_student_contact(session, transport_pass.student_id, school_id=school_id)
         student_name = f"{student.firstname or ''} {student.lastname or ''}".strip() if student else "Unknown"
         
         # Check number match
@@ -437,7 +542,8 @@ def get_student_transport_passes(student_id, term):
     """
     session = init_db()
     try:
-        passes = session.query(TransportPass).filter(
+        school_id = resolve_school_id()
+        passes = school_scoped_query(session, TransportPass, school_id).filter(
             TransportPass.student_id == student_id,
             TransportPass.term == term,
             TransportPass.status == 'active'
