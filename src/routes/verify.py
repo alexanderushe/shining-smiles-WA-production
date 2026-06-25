@@ -6,14 +6,34 @@ Read-only and unauthenticated: the (unguessable, UUID) pass_id is the capability
 pass_id is globally unique across schools, so no tenant context is needed — the
 lookup is by pass_id and the school/student come from the matched record.
 """
+import base64
 import datetime
 import html
+import os
 
 from flask import Blueprint, request, Response
 
 from utils.database import init_db, GatePass, TransportPass, StudentContact, GatePassScan
 
 verify_bp = Blueprint("verify", __name__)
+
+SCHOOL_NAME = "Shining Smiles College"
+
+
+def _logo_data_uri():
+    """Embed the school logo inline so the page is self-contained (no extra request)."""
+    here = os.path.dirname(__file__)
+    for p in ("static/school_logo.png", os.path.join(here, "..", "static", "school_logo.png")):
+        try:
+            if os.path.exists(p):
+                with open(p, "rb") as f:
+                    return "data:image/png;base64," + base64.b64encode(f.read()).decode("ascii")
+        except Exception:
+            pass
+    return ""
+
+
+_LOGO = _logo_data_uri()
 
 
 def _now():
@@ -36,19 +56,25 @@ def _page(status, color, emoji, title, rows):
         f'<tr><td class="l">{html.escape(str(l))}</td><td>{html.escape(str(v))}</td></tr>'
         for l, v in rows
     )
+    logo = f'<img src="{_LOGO}" alt="{html.escape(SCHOOL_NAME)}" class="logo">' if _LOGO else ""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html.escape(title)}</title>
+<title>{html.escape(title)} · {html.escape(SCHOOL_NAME)}</title>
 <style>
   body{{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;
-        background:#f4f6f8;color:#1f2933}}
-  .card{{max-width:430px;margin:32px auto;background:#fff;border-radius:16px;
-         box-shadow:0 6px 28px rgba(0,0,0,.08);overflow:hidden}}
-  .hd{{background:{color};color:#fff;padding:30px 20px;text-align:center}}
-  .hd .e{{font-size:52px;line-height:1}}
-  .hd h1{{margin:10px 0 0;font-size:23px;letter-spacing:.5px}}
-  .bd{{padding:18px 20px}}
+        background:#eef1f4;color:#1f2933}}
+  .card{{max-width:440px;margin:28px auto;background:#fff;border-radius:18px;
+         box-shadow:0 8px 30px rgba(0,0,0,.10);overflow:hidden}}
+  .brand{{text-align:center;padding:24px 20px 8px}}
+  .brand .logo{{height:64px;width:auto;object-fit:contain}}
+  .brand .sn{{margin-top:8px;font-size:18px;font-weight:700;letter-spacing:.4px;color:#0b2a4a}}
+  .brand .doc{{font-size:12px;color:#7b8794;text-transform:uppercase;letter-spacing:1.5px;margin-top:2px}}
+  .badge{{margin:14px 20px;background:{color};color:#fff;border-radius:12px;
+          padding:16px;text-align:center}}
+  .badge .e{{font-size:34px;line-height:1}}
+  .badge h1{{margin:4px 0 0;font-size:21px;letter-spacing:1px}}
+  .bd{{padding:6px 20px 18px}}
   table{{width:100%;border-collapse:collapse;font-size:15px}}
   td{{padding:10px 4px;border-bottom:1px solid #eef1f4;vertical-align:top}}
   td.l{{color:#7b8794;width:44%}}
@@ -56,9 +82,11 @@ def _page(status, color, emoji, title, rows):
   .ft{{padding:14px 20px;color:#9aa5b1;font-size:12px;text-align:center;border-top:1px solid #eef1f4}}
 </style></head>
 <body><div class="card">
-  <div class="hd"><div class="e">{emoji}</div><h1>{html.escape(status)}</h1></div>
+  <div class="brand">{logo}<div class="sn">{html.escape(SCHOOL_NAME)}</div>
+    <div class="doc">{html.escape(title)}</div></div>
+  <div class="badge"><div class="e">{emoji}</div><h1>{html.escape(status)}</h1></div>
   <div class="bd"><table>{body_rows}</table></div>
-  <div class="ft">Shining Smiles College · automated pass verification</div>
+  <div class="ft">Automated pass verification · scan to confirm authenticity</div>
 </div></body></html>"""
 
 

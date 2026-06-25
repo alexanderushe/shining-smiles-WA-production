@@ -297,7 +297,8 @@ def generate_transport_pass(student_id, term, route_type, service_type, amount_p
         # Generate QR code
         try:
             import segno
-            qr_url = f"{config.APP_BASE_URL}/verify-transport-pass?pass_id={pass_id}&whatsapp_number={whatsapp_number}"
+            # QR encodes only the (unguessable) pass_id — no phone number in the URL.
+            qr_url = f"{config.APP_BASE_URL}/verify-transport-pass?pass_id={pass_id}"
             qr = segno.make(qr_url)
             qr.save(qr_path, scale=10, border=4)
             
