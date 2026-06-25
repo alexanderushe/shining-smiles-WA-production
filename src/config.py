@@ -27,6 +27,9 @@ class Config:
     S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL")
     GATEPASS_S3_BUCKET = os.getenv("GATEPASS_S3_BUCKET", "shining-smiles-gatepasses")
     INVOICE_S3_BUCKET = os.getenv("INVOICE_S3_BUCKET", "shining-smiles-invoices")
+    RECEIPT_S3_BUCKET = os.getenv("RECEIPT_S3_BUCKET", "shining-smiles-receipts")
+    # Shared secret the SaaS must send (X-Receipt-Key) to POST /payment-receipt.
+    RECEIPT_WEBHOOK_SECRET = os.getenv("RECEIPT_WEBHOOK_SECRET", "")
     # Maintenance mode — when true the bot replies with a notice instead of serving data.
     BOT_MAINTENANCE = os.getenv("BOT_MAINTENANCE", "false").strip().lower() in ("1", "true", "yes", "on")
     BOT_MAINTENANCE_MESSAGE = os.getenv(

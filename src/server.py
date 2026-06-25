@@ -15,9 +15,11 @@ from flask import Flask, Response, request
 
 from webhook_handler import lambda_handler
 from routes.verify import verify_bp
+from routes.receipts import receipts_bp
 
 app = Flask(__name__)
 app.register_blueprint(verify_bp)
+app.register_blueprint(receipts_bp)
 
 # Minimal stand-in for the Lambda context. The live webhook path doesn't use it;
 # only the retired self-invoke recursion did (now a no-op).
