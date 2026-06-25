@@ -52,7 +52,7 @@ fi
 
 echo ">> [$TARGET] shipping build context to $BOX:$DIR"
 $SSH "mkdir -p $DIR"
-COPYFILE_DISABLE=1 tar czf - -C "$SCRIPT_DIR" src requirements.txt Dockerfile.server templates 2>/dev/null \
+COPYFILE_DISABLE=1 tar czf - -C "$SCRIPT_DIR" src requirements.txt Dockerfile.server templates static 2>/dev/null \
   | $SSH "tar xzf - -C $DIR"
 
 echo ">> [$TARGET] verifying env file exists on box"

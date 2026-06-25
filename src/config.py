@@ -26,6 +26,7 @@ class Config:
     # Object storage: set S3_ENDPOINT_URL to a Cloudflare R2 endpoint to use R2; unset = AWS S3.
     S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL")
     GATEPASS_S3_BUCKET = os.getenv("GATEPASS_S3_BUCKET", "shining-smiles-gatepasses")
+    INVOICE_S3_BUCKET = os.getenv("INVOICE_S3_BUCKET", "shining-smiles-invoices")
     # Maintenance mode — when true the bot replies with a notice instead of serving data.
     BOT_MAINTENANCE = os.getenv("BOT_MAINTENANCE", "false").strip().lower() in ("1", "true", "yes", "on")
     BOT_MAINTENANCE_MESSAGE = os.getenv(
