@@ -23,18 +23,14 @@ from utils.database import init_db, StudentContact, GatePass, GatePassScan, Gate
 from utils.whatsapp import send_whatsapp_message
 from utils.logger import setup_logger
 from api.sms_client import SMSClient
-from config import get_config
+from config import get_config, make_s3_client, Config as AppConfig
 
 logger = setup_logger(__name__)
 config = get_config()
 
-# AWS S3 client
-s3 = boto3.client(
-    's3',
-    region_name='us-east-2',
-    config=Config(signature_version='s3v4')
-)
-bucket_name = 'shining-smiles-gatepasses'
+# Object storage client (AWS S3, or Cloudflare R2 when S3_ENDPOINT_URL is set)
+s3 = make_s3_client()
+bucket_name = AppConfig.GATEPASS_S3_BUCKET
 
 def calculate_expiry_date(term, payment_percentage, payment_date=None):
     now = payment_date or datetime.now(timezone.utc)

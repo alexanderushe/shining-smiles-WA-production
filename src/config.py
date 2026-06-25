@@ -23,6 +23,9 @@ class Config:
     AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
     AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
     AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-2")  # Match S3 region
+    # Object storage: set S3_ENDPOINT_URL to a Cloudflare R2 endpoint to use R2; unset = AWS S3.
+    S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL")
+    GATEPASS_S3_BUCKET = os.getenv("GATEPASS_S3_BUCKET", "shining-smiles-gatepasses")
 
     TERM_START_DATES = {
         # 2025 terms (historical data)
@@ -60,7 +63,7 @@ class Config:
         }
     }
 
-    TRANSPORT_S3_BUCKET = "shining-smiles-transport-passes"
+    TRANSPORT_S3_BUCKET = os.getenv("TRANSPORT_S3_BUCKET", "shining-smiles-transport-passes")
 
     @classmethod
     def get_current_term(cls):
@@ -146,3 +149,28 @@ class DevelopmentConfig(Config):
 class ProductionConfig(Config):
     """Production configuration."""
     DEBUG = False
+
+
+def make_s3_client():
+    """S3 client honoring S3_ENDPOINT_URL (Cloudflare R2) when set, else AWS S3.
+
+    Credentials come from the standard AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+    env vars (R2 S3-API token when S3_ENDPOINT_URL is an R2 endpoint).
+    """
+    import boto3
+    from botocore.client import Config as BotoConfig
+
+    kwargs = {"config": BotoConfig(signature_version="s3v4")}
+    if Config.S3_ENDPOINT_URL:
+        kwargs["endpoint_url"] = Config.S3_ENDPOINT_URL
+        kwargs["region_name"] = "auto"
+    else:
+        kwargs["region_name"] = Config.AWS_DEFAULT_REGION
+    # Dedicated S3/R2 creds keep AWS_* unset so the DB layer's AWS Secrets Manager
+    # lookup fails fast and falls back to DATABASE_URL (the bot's own Postgres).
+    ak = os.getenv("S3_ACCESS_KEY_ID") or Config.AWS_ACCESS_KEY_ID
+    sk = os.getenv("S3_SECRET_ACCESS_KEY") or Config.AWS_SECRET_ACCESS_KEY
+    if ak and sk:
+        kwargs["aws_access_key_id"] = ak
+        kwargs["aws_secret_access_key"] = sk
+    return boto3.client("s3", **kwargs)
