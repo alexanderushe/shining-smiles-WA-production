@@ -1389,7 +1389,14 @@ def process_cloud_api_message(message, metadata):
             return
 
         print(f"🎯 DEBUG: Processing message from {from_number}: '{message_body}' for school {tenant_config.get('school_id')} via number {tenant_config.get('phone_number_id')}")
-        
+
+        # Maintenance mode — short-circuit before any data lookup or AI, reply with notice.
+        from config import Config as _MaintCfg
+        if _MaintCfg.BOT_MAINTENANCE:
+            print("🛠 Maintenance mode active — sending maintenance notice")
+            send_whatsapp_message_real(to=from_number, message=_MaintCfg.BOT_MAINTENANCE_MESSAGE)
+            return
+
         # Provide instant feedback to user
         try:
             mark_message_as_read(message_id)
