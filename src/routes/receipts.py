@@ -12,7 +12,7 @@ from flask import Blueprint, request, jsonify
 
 from config import Config as AppConfig
 from utils.database import init_db, StudentContact
-from utils.whatsapp import send_whatsapp_message
+from utils.whatsapp import send_whatsapp_message, send_whatsapp_template
 from utils.logger import setup_logger
 from services.receipt_service import generate_receipt_pdf, upload_and_sign
 
@@ -83,10 +83,23 @@ def payment_receipt():
             caption += f"\nOutstanding balance: {cur}{float(receipt['balance_after']):,.2f}"
         caption += "\n\nYour official receipt is attached. 📄"
 
-        result = send_whatsapp_message(
-            to=number, message=caption, media_url=url,
-            filename=f"Receipt_{receipt['reference']}.pdf",
-        )
+        amount_str = f"{cur}{float(amount):,.2f}"
+        filename = f"Receipt_{receipt['reference']}.pdf"
+        if AppConfig.RECEIPT_TEMPLATE_NAME:
+            # Business-initiated: deliver via the approved template (works outside 24h).
+            # Body order matches the template: amount, student name, student ID, receipt no.
+            result = send_whatsapp_template(
+                to=number,
+                template_name=AppConfig.RECEIPT_TEMPLATE_NAME,
+                language=AppConfig.RECEIPT_TEMPLATE_LANG,
+                body_params=[amount_str, student_name, student_id, receipt["reference"]],
+                document_link=url,
+                document_filename=filename,
+            )
+        else:
+            result = send_whatsapp_message(
+                to=number, message=caption, media_url=url, filename=filename,
+            )
         logger.info(f"Payment receipt sent to {number} for {student_id}", extra={"student_id": student_id})
         return jsonify({"status": "sent", "to": number, "result": result}), 200
     except Exception as e:

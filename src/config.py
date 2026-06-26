@@ -30,6 +30,10 @@ class Config:
     RECEIPT_S3_BUCKET = os.getenv("RECEIPT_S3_BUCKET", "shining-smiles-receipts")
     # Shared secret the SaaS must send (X-Receipt-Key) to POST /payment-receipt.
     RECEIPT_WEBHOOK_SECRET = os.getenv("RECEIPT_WEBHOOK_SECRET", "")
+    # Approved WhatsApp template for receipts (business-initiated, delivers outside
+    # the 24h window). Unset -> send a plain document (only inside a 24h window).
+    RECEIPT_TEMPLATE_NAME = os.getenv("RECEIPT_TEMPLATE_NAME", "")
+    RECEIPT_TEMPLATE_LANG = os.getenv("RECEIPT_TEMPLATE_LANG", "en_US")
     # Maintenance mode — when true the bot replies with a notice instead of serving data.
     BOT_MAINTENANCE = os.getenv("BOT_MAINTENANCE", "false").strip().lower() in ("1", "true", "yes", "on")
     BOT_MAINTENANCE_MESSAGE = os.getenv(
