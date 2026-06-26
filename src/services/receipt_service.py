@@ -164,11 +164,16 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
     pdf.set_xy(W / 2, py + 4)
     pdf.cell(80, 6, data.get("served_by") or "-", ln=True)
 
-    # ---- Footer: ongooo logo | website (small, centered) ----
-    pdf.set_y(-20)
+    # ---- Footer: 'official receipt' note, then ongooo logo | website at the bottom ----
+    pdf.set_y(-28)
+    pdf.set_font("Helvetica", "I", 7.5)
+    pdf.set_text_color(*_MUTE)
+    pdf.cell(0, 4, "Official computer-generated receipt - thank you for your payment.", align="C")
+
+    pdf.set_y(-22)
+    logo_w = 18
     site = "www.ongororo.com"
-    logo_w = 11
-    pdf.set_font("Helvetica", "", 8)
+    pdf.set_font("Helvetica", "", 9)
     site_text = "  |  " + site
     tw = pdf.get_string_width(site_text)
     fy = pdf.get_y()
@@ -176,17 +181,12 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
     brand = "static/official_logo.png"
     if os.path.exists(brand):
         try:
-            pdf.image(brand, x=x0, y=fy - 1.5, w=logo_w)
+            pdf.image(brand, x=x0, y=fy, w=logo_w)
         except Exception as e:
             logger.warning(f"footer logo failed: {e}", extra=extra_log)
-    pdf.set_xy(x0 + logo_w, fy)
+    pdf.set_xy(x0 + logo_w, fy + logo_w / 2 - 2.5)
     pdf.set_text_color(*_MUTE)
     pdf.cell(tw, 5, site_text)
-
-    pdf.set_y(-10)
-    pdf.set_font("Helvetica", "I", 7.5)
-    pdf.set_text_color(*_MUTE)
-    pdf.cell(0, 4, "Official computer-generated receipt - thank you for your payment.", align="C")
 
     pdf.output(output_path)
     return output_path
