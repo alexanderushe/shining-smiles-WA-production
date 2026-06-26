@@ -105,25 +105,28 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
     kv("Student ID", data.get("student_id", "-"), sy + 7.5)
     kv("Class", data.get("student_class") or "-", sy + 15)
 
-    # School identity on the right: logo, then name + address right-aligned.
+    # School identity on the right, top-aligned with the student details:
+    # name + address right-aligned, school logo at the top-right corner.
     rx = W - M
-    rcol = 110
+    rcol = 108
     rlogo = "static/school_logo.png"
     if os.path.exists(rlogo):
-        pdf.image(rlogo, x=rx - 18, y=sy - 2, w=18)
-    ty = sy + 18
-    pdf.set_xy(rcol, ty)
+        pdf.image(rlogo, x=rx - 16, y=sy - 1, w=16)
+    rtext = rx - 19  # right edge of the text, just left of the logo
+    pdf.set_xy(rcol, sy)
     pdf.set_font("Helvetica", "B", 10.5)
     pdf.set_text_color(*_NAVY)
-    pdf.cell(rx - rcol, 5, school_name, ln=True, align="R")
+    pdf.cell(rtext - rcol, 5.5, school_name, ln=True, align="R")
     pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(*_INK)
+    yy = sy + 6
     for line in [data.get("school_address"),
                  f"Tel: {SCHOOL_INFO.get('tel', '')}",
                  f"Email: {SCHOOL_INFO.get('email_admin', '')}"]:
         if line and str(line).strip():
-            pdf.set_x(rcol)
-            pdf.cell(rx - rcol, 4.5, str(line), ln=True, align="R")
+            pdf.set_xy(rcol, yy)
+            pdf.cell(rtext - rcol, 4.5, str(line), ln=True, align="R")
+            yy += 4.5
 
     # ---- Line items ----
     y = 132
