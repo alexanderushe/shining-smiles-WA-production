@@ -94,10 +94,10 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
     pdf.set_x(W - M - 70)
     pdf.cell(70, 5, f"Date: {date_str}", ln=True, align="R")
 
-    rule(44)
+    rule(46)
 
     # ---- Prominent amount paid ----
-    pdf.set_xy(M, 49)
+    pdf.set_xy(M, 58)
     pdf.set_font("Helvetica", "B", 19)
     pdf.set_text_color(*_GREEN)
     pdf.cell(0, 10, f"{_money(currency, data.get('amount', 0))} paid", ln=True)
@@ -107,7 +107,7 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
     pdf.cell(0, 5, f"on {date_str}", ln=True)
 
     # ---- Student / billed-to block ----
-    y = 70
+    y = 94
     label("Student", M, y)
     label("Class", W / 2, y)
     pdf.set_font("Helvetica", "B", 12)
@@ -123,7 +123,7 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
     pdf.cell(90, 5, f"Student ID: {data.get('student_id', '-')}", ln=True)
 
     # ---- Line items ----
-    y = 92
+    y = 132
     pdf.set_xy(M, y)
     pdf.set_font("Helvetica", "B", 9)
     pdf.set_fill_color(*_NAVY)
@@ -151,7 +151,7 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
         pdf.cell(40, 6.5, _money(currency, data.get("balance_after")) + "  ", ln=True, align="R")
 
     # ---- Payment details ----
-    pdf.ln(6)
+    pdf.ln(14)
     py = pdf.get_y()
     rule(py)
     py += 4
@@ -164,14 +164,25 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
     pdf.set_xy(W / 2, py + 4)
     pdf.cell(80, 6, data.get("served_by") or "-", ln=True)
 
-    # ---- Footer: ongooo logo at the very bottom (small) ----
-    pdf.set_y(-24)
+    # ---- Footer: ongooo logo | website (small, centered) ----
+    pdf.set_y(-20)
+    site = "www.ongororo.com"
+    logo_w = 11
+    pdf.set_font("Helvetica", "", 8)
+    site_text = "  |  " + site
+    tw = pdf.get_string_width(site_text)
+    fy = pdf.get_y()
+    x0 = (W - (logo_w + tw)) / 2
     brand = "static/official_logo.png"
     if os.path.exists(brand):
         try:
-            pdf.image(brand, x=(W - 22) / 2, y=pdf.get_y(), w=22)
+            pdf.image(brand, x=x0, y=fy - 1.5, w=logo_w)
         except Exception as e:
             logger.warning(f"footer logo failed: {e}", extra=extra_log)
+    pdf.set_xy(x0 + logo_w, fy)
+    pdf.set_text_color(*_MUTE)
+    pdf.cell(tw, 5, site_text)
+
     pdf.set_y(-10)
     pdf.set_font("Helvetica", "I", 7.5)
     pdf.set_text_color(*_MUTE)
