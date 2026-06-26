@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Unit tests (network-mocked)
+        env:
+          SMS_API_BASE_URL: http://saas.local/api/v1/integrations/whatsapp/
+          SMS_API_KEY: testkey
+          USE_CLOUD_API: "true"
+        # Excluded here:
+        #   e2e_bot_saas.py    — live end-to-end, needs real SaaS + WhatsApp.
+        #   test_services.py   — needs a Postgres DB (init_db); add a services: postgres
+        #   test_session_fix.py  job to cover these.
+        run: >
+          pytest tests/ -q
+          --ignore=tests/e2e_bot_saas.py
+          --ignore=tests/test_services.py
+          --ignore=tests/test_session_fix.py
