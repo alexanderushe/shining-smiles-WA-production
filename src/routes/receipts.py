@@ -45,13 +45,18 @@ def payment_receipt():
     try:
         session = init_db()
         contact = session.query(StudentContact).filter(StudentContact.student_id == student_id).first()
-        if not contact:
-            return jsonify({"error": f"student {student_id} not found"}), 404
-        number = _parent_number(contact)
+
+        # Prefer the phone + name the SaaS sent (works even if this student was
+        # never cached); fall back to the local contact.
+        number = (data.get("phone") or "").strip() or (_parent_number(contact) if contact else None)
         if not number:
             return jsonify({"error": f"no phone for student {student_id}"}), 422
 
-        student_name = " ".join(p for p in [contact.firstname, contact.lastname] if p) or student_id
+        student_name = (data.get("student_name") or "").strip()
+        if not student_name:
+            student_name = (" ".join(p for p in [getattr(contact, "firstname", ""),
+                                                 getattr(contact, "lastname", "")] if p)
+                            if contact else "") or student_id
         receipt = {
             "student_name": student_name,
             "student_id": student_id,
