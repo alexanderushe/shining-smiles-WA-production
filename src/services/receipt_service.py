@@ -66,24 +66,7 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
         pdf.set_text_color(*_MUTE)
         pdf.cell(0, 4, txt.upper(), ln=False)
 
-    # ---- Header: school identity (left) + receipt meta (right) ----
-    logo = "static/school_logo.png"
-    if os.path.exists(logo):
-        pdf.image(logo, x=M, y=14, w=22)
-    tx = M + 27
-    pdf.set_xy(tx, 14)
-    pdf.set_font("Helvetica", "B", 15)
-    pdf.set_text_color(*_NAVY)
-    pdf.cell(110, 7, school_name, ln=True)
-    pdf.set_font("Helvetica", "", 8.5)
-    pdf.set_text_color(*_INK)
-    for line in [data.get("school_address"),
-                 f"Tel: {SCHOOL_INFO.get('tel', '')}",
-                 f"Email: {SCHOOL_INFO.get('email_admin', '')}"]:
-        if line and str(line).strip():
-            pdf.set_x(tx)
-            pdf.cell(110, 4.6, str(line), ln=True)
-
+    # ---- Header: receipt meta only (top-right). School identity moves beside the student. ----
     pdf.set_xy(W - M - 70, 14)
     pdf.set_font("Helvetica", "B", 15)
     pdf.set_text_color(*_INK)
@@ -106,21 +89,41 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
     pdf.set_text_color(*_MUTE)
     pdf.cell(0, 5, f"on {date_str}", ln=True)
 
-    # ---- Student / billed-to block ----
-    y = 94
-    label("Student", M, y)
-    label("Class", W / 2, y)
-    pdf.set_font("Helvetica", "B", 12)
+    # ---- Student details (left) + school identity (right) ----
+    sy = 80
+
+    def kv(lab, val, yy):
+        pdf.set_xy(M, yy)
+        pdf.set_font("Helvetica", "", 9.5)
+        pdf.set_text_color(*_MUTE)
+        pdf.cell(24, 6, lab, ln=False)
+        pdf.set_font("Helvetica", "B", 10.5)
+        pdf.set_text_color(*_INK)
+        pdf.cell(62, 6, str(val), ln=False)
+
+    kv("Student", data.get("student_name", "-"), sy)
+    kv("Student ID", data.get("student_id", "-"), sy + 7.5)
+    kv("Class", data.get("student_class") or "-", sy + 15)
+
+    # School identity on the right: logo, then name + address right-aligned.
+    rx = W - M
+    rcol = 110
+    rlogo = "static/school_logo.png"
+    if os.path.exists(rlogo):
+        pdf.image(rlogo, x=rx - 18, y=sy - 2, w=18)
+    ty = sy + 18
+    pdf.set_xy(rcol, ty)
+    pdf.set_font("Helvetica", "B", 10.5)
+    pdf.set_text_color(*_NAVY)
+    pdf.cell(rx - rcol, 5, school_name, ln=True, align="R")
+    pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(*_INK)
-    pdf.set_xy(M, y + 4)
-    pdf.cell(90, 6, data.get("student_name", "-"), ln=False)
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.set_xy(W / 2, y + 4)
-    pdf.cell(80, 6, data.get("student_class") or "-", ln=True)
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_text_color(*_MUTE)
-    pdf.set_xy(M, y + 11)
-    pdf.cell(90, 5, f"Student ID: {data.get('student_id', '-')}", ln=True)
+    for line in [data.get("school_address"),
+                 f"Tel: {SCHOOL_INFO.get('tel', '')}",
+                 f"Email: {SCHOOL_INFO.get('email_admin', '')}"]:
+        if line and str(line).strip():
+            pdf.set_x(rcol)
+            pdf.cell(rx - rcol, 4.5, str(line), ln=True, align="R")
 
     # ---- Line items ----
     y = 132
