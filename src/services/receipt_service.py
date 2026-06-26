@@ -52,7 +52,8 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
 
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.set_margins(M, 12, M)          # so line breaks return to the same left edge
+    pdf.set_auto_page_break(auto=False)  # single page
 
     def rule(y, x0=M, x1=W - M):
         pdf.set_draw_color(*_LINE)
@@ -164,11 +165,11 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
     pdf.cell(80, 6, data.get("served_by") or "-", ln=True)
 
     # ---- Footer: ongooo logo at the very bottom (small) ----
-    pdf.set_y(-26)
-    brand = "static/official_logo.svg"
+    pdf.set_y(-24)
+    brand = "static/official_logo.png"
     if os.path.exists(brand):
         try:
-            pdf.image(brand, x=(W - 20) / 2, y=pdf.get_y(), w=20)
+            pdf.image(brand, x=(W - 22) / 2, y=pdf.get_y(), w=22)
         except Exception as e:
             logger.warning(f"footer logo failed: {e}", extra=extra_log)
     pdf.set_y(-10)
