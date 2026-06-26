@@ -3,9 +3,6 @@
 A payment is recorded in the SaaS, the SaaS pushes the details to the bot
 (/payment-receipt), and this module renders a branded PDF receipt, uploads it to
 object storage (R2), and returns a presigned link for delivery.
-
-Self-contained generation: shares the school branding (logo, SCHOOL_INFO) used by
-the invoice PDFs.
 """
 import os
 from datetime import datetime, timezone
@@ -19,7 +16,11 @@ logger = setup_logger(__name__)
 s3 = make_s3_client()
 bucket_name = AppConfig.RECEIPT_S3_BUCKET
 
-_BLUE = (0, 0, 139)
+_INK = (31, 41, 51)        # near-black text
+_MUTE = (123, 135, 148)    # muted grey labels
+_GREEN = (30, 132, 73)     # "paid" accent
+_LINE = (225, 229, 234)    # hairline rules
+_NAVY = (11, 42, 74)       # school name
 
 
 def _money(currency, amount):
@@ -32,8 +33,9 @@ def _money(currency, amount):
 def generate_receipt_pdf(data, output_path, extra_log=None):
     """Render a branded payment receipt to output_path. Returns the path.
 
-    data keys: student_name, student_id, reference, date (str), currency,
-    amount, items [{description, amount}], balance_after, payer_name.
+    data keys: student_name, student_id, student_class, school_name, school_address,
+    reference, date, currency, amount, items [{description, amount}], method,
+    served_by, balance_after.
     """
     extra_log = extra_log or {}
     try:
@@ -43,80 +45,136 @@ def generate_receipt_pdf(data, output_path, extra_log=None):
         raise Exception("PDF generation dependencies not available")
 
     currency = data.get("currency") or "$"
+    date_str = data.get("date") or datetime.now(timezone.utc).strftime("%d %b %Y")
+    school_name = data.get("school_name") or SCHOOL_INFO.get("name", "Shining Smiles College")
+    W = 210
+    M = 16  # left/right margin
+
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_auto_page_break(auto=True, margin=18)
 
-    # --- Header: logo + school identity ---
-    logo_path = "static/school_logo.png"
-    if os.path.exists(logo_path):
-        pdf.image(logo_path, x=10, y=10, w=28)
-        hx = 45
-    else:
-        hx = 10
-    pdf.set_xy(hx, 12)
-    pdf.set_font("Helvetica", "B", 16)
-    pdf.set_text_color(*_BLUE)
-    pdf.cell(0, 7, SCHOOL_INFO.get("name", "SHINING SMILES COLLEGE"), ln=True)
-    pdf.set_xy(hx, 20)
+    def rule(y, x0=M, x1=W - M):
+        pdf.set_draw_color(*_LINE)
+        pdf.set_line_width(0.3)
+        pdf.line(x0, y, x1, y)
+
+    def label(txt, x, y):
+        pdf.set_xy(x, y)
+        pdf.set_font("Helvetica", "B", 7.5)
+        pdf.set_text_color(*_MUTE)
+        pdf.cell(0, 4, txt.upper(), ln=False)
+
+    # ---- Header: school identity (left) + receipt meta (right) ----
+    logo = "static/school_logo.png"
+    if os.path.exists(logo):
+        pdf.image(logo, x=M, y=14, w=22)
+    tx = M + 27
+    pdf.set_xy(tx, 14)
+    pdf.set_font("Helvetica", "B", 15)
+    pdf.set_text_color(*_NAVY)
+    pdf.cell(110, 7, school_name, ln=True)
+    pdf.set_font("Helvetica", "", 8.5)
+    pdf.set_text_color(*_INK)
+    for line in [data.get("school_address"),
+                 f"Tel: {SCHOOL_INFO.get('tel', '')}",
+                 f"Email: {SCHOOL_INFO.get('email_admin', '')}"]:
+        if line and str(line).strip():
+            pdf.set_x(tx)
+            pdf.cell(110, 4.6, str(line), ln=True)
+
+    pdf.set_xy(W - M - 70, 14)
+    pdf.set_font("Helvetica", "B", 15)
+    pdf.set_text_color(*_INK)
+    pdf.cell(70, 7, "PAYMENT RECEIPT", ln=True, align="R")
     pdf.set_font("Helvetica", "", 9)
-    pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, 5, f"Email: {SCHOOL_INFO.get('email_admin', '')}", ln=True)
-    pdf.set_xy(hx, 25)
-    pdf.cell(0, 5, f"Tel: {SCHOOL_INFO.get('tel', '')}", ln=True)
-    pdf.ln(16)
+    pdf.set_x(W - M - 70)
+    pdf.cell(70, 5, f"Receipt No: {data.get('reference', '-')}", ln=True, align="R")
+    pdf.set_x(W - M - 70)
+    pdf.cell(70, 5, f"Date: {date_str}", ln=True, align="R")
 
-    # --- Title ---
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.set_text_color(30, 132, 73)  # green = paid
-    pdf.cell(0, 10, "PAYMENT RECEIPT", ln=True, align="C")
-    pdf.ln(2)
+    rule(44)
 
-    # --- Meta row (receipt # + date) ---
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_text_color(0, 0, 0)
-    pdf.cell(95, 6, f"Receipt No: {data.get('reference', '-')}", border=0)
-    pdf.cell(0, 6, f"Date: {data.get('date', datetime.now(timezone.utc).strftime('%d %b %Y'))}", ln=True, align="R")
-    pdf.cell(95, 6, f"Student: {data.get('student_name', '-')}", border=0)
-    pdf.cell(0, 6, f"ID: {data.get('student_id', '-')}", ln=True, align="R")
-    if data.get("payer_name"):
-        pdf.cell(0, 6, f"Received from: {data['payer_name']}", ln=True)
-    pdf.ln(4)
+    # ---- Prominent amount paid ----
+    pdf.set_xy(M, 49)
+    pdf.set_font("Helvetica", "B", 19)
+    pdf.set_text_color(*_GREEN)
+    pdf.cell(0, 10, f"{_money(currency, data.get('amount', 0))} paid", ln=True)
+    pdf.set_x(M)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*_MUTE)
+    pdf.cell(0, 5, f"on {date_str}", ln=True)
 
-    # --- Line items table ---
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_fill_color(*_BLUE)
-    pdf.set_text_color(255, 255, 255)
-    pdf.cell(130, 8, "  Description", border=0, fill=True)
-    pdf.cell(0, 8, "Amount  ", border=0, fill=True, ln=True, align="R")
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font("Helvetica", "", 10)
-    items = data.get("items") or [{"description": "Payment received", "amount": data.get("amount", 0)}]
-    fill = False
-    for it in items:
-        pdf.set_fill_color(245, 247, 249)
-        pdf.cell(130, 8, "  " + str(it.get("description", "Payment")), border="B", fill=fill)
-        pdf.cell(0, 8, _money(currency, it.get("amount", 0)) + "  ", border="B", fill=fill, ln=True, align="R")
-        fill = not fill
-
-    # --- Total paid + balance ---
-    pdf.ln(2)
+    # ---- Student / billed-to block ----
+    y = 70
+    label("Student", M, y)
+    label("Class", W / 2, y)
     pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(130, 9, "  TOTAL PAID", border=0)
-    pdf.set_text_color(30, 132, 73)
-    pdf.cell(0, 9, _money(currency, data.get("amount", 0)) + "  ", ln=True, align="R")
-    pdf.set_text_color(0, 0, 0)
-    if data.get("balance_after") is not None:
-        pdf.set_font("Helvetica", "", 11)
-        pdf.cell(130, 8, "  Outstanding balance", border=0)
-        pdf.cell(0, 8, _money(currency, data.get("balance_after")) + "  ", ln=True, align="R")
+    pdf.set_text_color(*_INK)
+    pdf.set_xy(M, y + 4)
+    pdf.cell(90, 6, data.get("student_name", "-"), ln=False)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_xy(W / 2, y + 4)
+    pdf.cell(80, 6, data.get("student_class") or "-", ln=True)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*_MUTE)
+    pdf.set_xy(M, y + 11)
+    pdf.cell(90, 5, f"Student ID: {data.get('student_id', '-')}", ln=True)
 
-    # --- Footer ---
-    pdf.ln(12)
-    pdf.set_font("Helvetica", "I", 9)
-    pdf.set_text_color(120, 120, 120)
-    pdf.multi_cell(0, 5, "This is an official computer-generated receipt from Shining Smiles College. "
-                         "Thank you for your payment.", align="C")
+    # ---- Line items ----
+    y = 92
+    pdf.set_xy(M, y)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(*_NAVY)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(W - 2 * M - 40, 8, "  Description", fill=True, ln=False)
+    pdf.cell(40, 8, "Amount  ", fill=True, ln=True, align="R")
+
+    pdf.set_text_color(*_INK)
+    items = data.get("items") or [{"description": "Payment received", "amount": data.get("amount", 0)}]
+    for it in items:
+        pdf.set_font("Helvetica", "", 9.5)
+        pdf.cell(W - 2 * M - 40, 7.5, "  " + str(it.get("description", "Payment")), border="B")
+        pdf.cell(40, 7.5, _money(currency, it.get("amount", 0)) + "  ", border="B", ln=True, align="R")
+
+    # ---- Total ----
+    pdf.ln(1)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(W - 2 * M - 40, 9, "  TOTAL PAID", ln=False)
+    pdf.set_text_color(*_GREEN)
+    pdf.cell(40, 9, _money(currency, data.get("amount", 0)) + "  ", ln=True, align="R")
+    pdf.set_text_color(*_INK)
+    if data.get("balance_after") is not None:
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(W - 2 * M - 40, 6.5, "  Outstanding balance", ln=False)
+        pdf.cell(40, 6.5, _money(currency, data.get("balance_after")) + "  ", ln=True, align="R")
+
+    # ---- Payment details ----
+    pdf.ln(6)
+    py = pdf.get_y()
+    rule(py)
+    py += 4
+    label("Payment Method", M, py)
+    label("Served By", W / 2, py)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(*_INK)
+    pdf.set_xy(M, py + 4)
+    pdf.cell(90, 6, (data.get("method") or "-").title(), ln=False)
+    pdf.set_xy(W / 2, py + 4)
+    pdf.cell(80, 6, data.get("served_by") or "-", ln=True)
+
+    # ---- Footer: ongooo logo at the very bottom (small) ----
+    pdf.set_y(-26)
+    brand = "static/official_logo.svg"
+    if os.path.exists(brand):
+        try:
+            pdf.image(brand, x=(W - 20) / 2, y=pdf.get_y(), w=20)
+        except Exception as e:
+            logger.warning(f"footer logo failed: {e}", extra=extra_log)
+    pdf.set_y(-10)
+    pdf.set_font("Helvetica", "I", 7.5)
+    pdf.set_text_color(*_MUTE)
+    pdf.cell(0, 4, "Official computer-generated receipt - thank you for your payment.", align="C")
 
     pdf.output(output_path)
     return output_path

@@ -60,13 +60,17 @@ def payment_receipt():
         receipt = {
             "student_name": student_name,
             "student_id": student_id,
+            "student_class": data.get("student_class"),
+            "school_name": data.get("school_name"),
+            "school_address": data.get("school_address"),
             "reference": data.get("reference") or "RCPT",
             "date": data.get("date"),
             "currency": data.get("currency") or "$",
             "amount": amount,
             "items": data.get("items"),
             "balance_after": data.get("balance_after"),
-            "payer_name": data.get("payer_name"),
+            "method": data.get("method"),
+            "served_by": data.get("served_by") or data.get("payer_name"),
         }
 
         tmp = os.path.join(tempfile.gettempdir(), f"receipt_{receipt['reference']}.pdf")
