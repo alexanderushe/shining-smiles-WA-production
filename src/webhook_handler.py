@@ -79,9 +79,9 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
     menu_text = (
         "──────────────\n"
         "➊ *View Balance*\n"
-        "➋ *Request Statement*\n"
+        "➋ *Request Statement* _(coming soon)_\n"
         "➌ *Get Gate Pass*\n"
-        "➍ *Request Invoice*\n"
+        "➍ *Pro-forma Invoice*\n"
         "➎ *Transport Pass* 🚌\n"
         "──────────────\n"
         "_Reply 'menu' anytime to see options_"
@@ -388,6 +388,12 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                     return f"⚠️ *Hi {fullname},*\n*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
 
             elif message_body in ["2", "statement", "request statement"]:
+                # PAUSED: account statement temporarily disabled while it's improved.
+                return (f"⏸️ *Hi {fullname},*\n*Request Statement* is temporarily unavailable "
+                        "while we improve it.\nFor your current balance, tap ➊ *View Balance*.\n"
+                        f"{menu_text}")
+
+            elif message_body in ["__paused_statement__"]:
                 try:
                     if not re.match(r'^\d{4}-\d$', default_term) or default_term not in config.TERM_START_DATES:
                         logger.error(f"Invalid or unconfigured default term: {default_term}", extra=extra_log)
