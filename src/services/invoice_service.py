@@ -130,14 +130,14 @@ def get_invoice_line_items(student_id, term, sms_client, extra_log):
             """Find all payments that match the given fee type keywords"""
             matched_payments = []
             for payment in payments_list:
-                payment_fee_type = payment.get('fee_type', '').lower()
+                payment_fee_type = (payment.get('fee_type') or '').lower()
                 if any(keyword in payment_fee_type for keyword in fee_type_keywords):
                     matched_payments.append(float(payment.get('amount', 0)))
             return sum(matched_payments)
         
         # 1. Tuition & Levies (Mandatory)
         tuition_keywords = ['tuition', 'school fee', 'levy', 'term', 'education', 'general', 'admin']
-        tuition_billed = sum(float(f['amount']) for f in fees_list if any(k in f.get('fee_type', '').lower() for k in tuition_keywords))
+        tuition_billed = sum(float(f['amount']) for f in fees_list if any(k in (f.get('fee_type') or '').lower() for k in tuition_keywords))
         tuition_paid = get_payments_for_fee_type(tuition_keywords)
         
         if tuition_billed > 0 or tuition_paid > 0:
@@ -154,7 +154,7 @@ def get_invoice_line_items(student_id, term, sms_client, extra_log):
         
         # 2. Hot Meals (Mandatory for ECD, Optional for others)
         meal_keywords = ['meal', 'hot meal', 'lunch', 'food', 'feeding']
-        meal_billed = sum(float(f['amount']) for f in fees_list if any(k in f.get('fee_type', '').lower() for k in meal_keywords))
+        meal_billed = sum(float(f['amount']) for f in fees_list if any(k in (f.get('fee_type') or '').lower() for k in meal_keywords))
         meal_paid = get_payments_for_fee_type(meal_keywords)
         
         if meal_billed > 0 or meal_paid > 0:
@@ -172,7 +172,7 @@ def get_invoice_line_items(student_id, term, sms_client, extra_log):
         
         # 3. Transport (Optional)
         transport_keywords = ['transport', 'bus', 'shuttle', 'drive']
-        transport_billed = sum(float(f['amount']) for f in fees_list if any(k in f.get('fee_type', '').lower() for k in transport_keywords))
+        transport_billed = sum(float(f['amount']) for f in fees_list if any(k in (f.get('fee_type') or '').lower() for k in transport_keywords))
         transport_paid = get_payments_for_fee_type(transport_keywords)
         
         if transport_billed > 0 or transport_paid > 0:
