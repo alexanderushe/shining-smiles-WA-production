@@ -425,6 +425,19 @@ class SaaSClient:
             )
             raise
 
+    def get_proforma(self, student_id):
+        """Selectable fees for the pro-forma target term. Returns the SaaS payload
+        as-is: {available, term, term_label, grade_label, currency, items:[...]}."""
+        try:
+            return self._get(f"students/{student_id}/proforma/", student_id=student_id)
+        except Exception as exc:
+            logger.error(
+                "Error fetching pro-forma for %s: %s",
+                student_id, str(exc),
+                extra={"request_id": self.request_id, "student_id": student_id},
+            )
+            return {"available": False, "reason": "error"}
+
     @limits(calls=10, period=60)
     def get_students_in_debt(self, student_id=None):
         try:

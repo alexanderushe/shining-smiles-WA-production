@@ -659,7 +659,31 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                     session.commit()
                     return f"⚠️ *Hi {fullname},*\n*An unexpected error occurred.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
 
-            elif message_body in ["4", "invoice", "request invoice"]:
+            elif message_body in ["4", "invoice", "proforma", "pro-forma", "request invoice"]:
+                # Pro-forma invoice for the upcoming term (replaces the old billed invoice).
+                from services.proforma_flow import list_fees
+                if len(student_ids) == 1:
+                    msg, ok = list_fees(student_ids[0], sms_client)
+                    if ok:
+                        user_state.student_id = student_ids[0]
+                        user_state.state = "awaiting_proforma_selection"
+                        user_state.last_updated = current_time
+                        session.commit()
+                    return msg
+                lines = []
+                for i, sid in enumerate(student_ids, 1):
+                    c = next((x for x in contacts if getattr(x, "student_id", None) == sid), None)
+                    nm = (" ".join(p for p in [getattr(c, "firstname", ""), getattr(c, "lastname", "")] if p)
+                          if c else sid) or sid
+                    lines.append(f"{i}. {nm} ({sid})")
+                user_state.state = "awaiting_proforma_student"
+                user_state.last_updated = current_time
+                session.commit()
+                return "🧾 *Pro-forma Invoice*\nWhich student? Reply with the number:\n\n" + "\n".join(lines)
+
+            elif message_body in ["__paused_legacy_invoice__"]:
+                # PAUSED: legacy billed-invoice (billed vs paid). Superseded by the
+                # pro-forma above on menu 4. Kept for a possible future re-enable.
                 # Between terms: invoice for the upcoming term; otherwise current term
                 if config.is_between_terms():
                     term = config.get_next_term() or config.get_most_recent_completed_term()
@@ -1122,6 +1146,33 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
             else:
                 return add_menu_if_needed(f"Invalid input. Please try again.", show_menu=True)
+
+        elif user_state.state == "awaiting_proforma_student":
+            if message_body in ("menu", "cancel", "back"):
+                user_state.state = "main_menu"; user_state.last_updated = current_time; session.commit()
+                return add_menu_if_needed(f"Hello, {fullname}.", show_menu=True)
+            m = message_body.strip()
+            if m.isdigit() and 1 <= int(m) <= len(student_ids):
+                from services.proforma_flow import list_fees
+                sid = student_ids[int(m) - 1]
+                msg, ok = list_fees(sid, sms_client)
+                user_state.student_id = sid if ok else user_state.student_id
+                user_state.state = "awaiting_proforma_selection" if ok else "main_menu"
+                user_state.last_updated = current_time
+                session.commit()
+                return msg
+            return "Reply with the student number, or *menu* to go back."
+
+        elif user_state.state == "awaiting_proforma_selection":
+            from services.proforma_flow import generate_and_send
+            sid = user_state.student_id
+            contact = next((x for x in contacts if getattr(x, "student_id", None) == sid), None)
+            reply = generate_and_send(sid, message_body, sms_client, session, whatsapp_number, contact)
+            # Stay in selection state only if the parent hasn't cancelled/succeeded.
+            if reply and reply.startswith("I didn't catch"):
+                return reply
+            user_state.state = "main_menu"; user_state.last_updated = current_time; session.commit()
+            return reply if reply else "✅ Your pro-forma invoice is attached above. Reply *menu* for options."
 
         elif user_state.state in ["awaiting_term_balance", "awaiting_term_statement", "awaiting_term_gatepass"]:
             # Allow users to return to main menu or trigger other actions

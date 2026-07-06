@@ -41,13 +41,15 @@ def resolve_school_id(explicit_school_id=None):
 
 class StudentContact(Base):
     __tablename__ = "student_contacts"
-    __table_args__ = (
-        UniqueConstraint("school_id", "student_id", name="uq_student_contacts_school_student_id"),
-    )
+    # student_id stays GLOBALLY unique so the gate_passes / transport_passes FKs
+    # (which reference student_id alone) have a target and create_all succeeds.
+    # Per-school uniqueness (composite school_id+student_id) is deferred to
+    # 2nd-school onboarding — it needs composite FKs too. Tenants are isolated by
+    # the school_id column + the scoped query layer, not by this constraint.
 
     id = Column(Integer, primary_key=True)
-    school_id = Column(String(64), nullable=False, default=resolve_school_id)
-    student_id = Column(String, nullable=False)
+    school_id = Column(String(64), nullable=False, default=resolve_school_id, index=True)
+    student_id = Column(String, nullable=False, unique=True)
     firstname = Column(String, nullable=True)
     lastname = Column(String, nullable=True)
     email = Column(String, nullable=True)
@@ -142,6 +144,15 @@ class TransportPassRequestLog(Base):
     student_id = Column(String, nullable=False)
     week_start_date = Column(DateTime(timezone=True), nullable=False)
     request_count = Column(Integer, default=0)
+    last_request_date = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+
+class ProformaRequestLog(Base):
+    __tablename__ = "proforma_request_logs"
+
+    id = Column(Integer, primary_key=True)
+    school_id = Column(String(64), nullable=False, default=resolve_school_id)
+    student_id = Column(String, nullable=False)
     last_request_date = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
