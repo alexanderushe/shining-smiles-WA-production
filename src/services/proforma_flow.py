@@ -21,6 +21,7 @@ from services.proforma_pdf import generate_proforma_pdf
 logger = setup_logger(__name__)
 
 RATE_LIMIT_DAYS = 7
+MAX_PER_WINDOW = 2  # allowed pro-forma requests per student per 7-day window
 
 
 def _fmt_items(items):
@@ -74,14 +75,16 @@ def _parse_selection(message_body, count):
 
 
 def _rate_limited(session, student_id, school_id):
-    log = school_scoped_query(session, ProformaRequestLog, school_id).filter(
-        ProformaRequestLog.student_id == student_id
-    ).order_by(ProformaRequestLog.last_request_date.desc()).first()
-    if log and log.last_request_date:
-        elapsed = datetime.now(timezone.utc) - log.last_request_date
-        if elapsed < timedelta(days=RATE_LIMIT_DAYS):
-            nxt = (log.last_request_date + timedelta(days=RATE_LIMIT_DAYS)).strftime("%d %b %Y")
-            return nxt
+    # Allow MAX_PER_WINDOW requests in a rolling 7-day window; block the next one
+    # until the oldest request in the window ages out.
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RATE_LIMIT_DAYS)
+    recent = school_scoped_query(session, ProformaRequestLog, school_id).filter(
+        ProformaRequestLog.student_id == student_id,
+        ProformaRequestLog.last_request_date >= cutoff,
+    ).order_by(ProformaRequestLog.last_request_date.asc()).all()
+    if len(recent) >= MAX_PER_WINDOW:
+        nxt = (recent[0].last_request_date + timedelta(days=RATE_LIMIT_DAYS)).strftime("%d %b %Y")
+        return nxt
     return None
 
 
