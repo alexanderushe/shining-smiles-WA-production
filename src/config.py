@@ -34,6 +34,9 @@ class Config:
     # the 24h window). Unset -> send a plain document (only inside a 24h window).
     RECEIPT_TEMPLATE_NAME = os.getenv("RECEIPT_TEMPLATE_NAME", "")
     RECEIPT_TEMPLATE_LANG = os.getenv("RECEIPT_TEMPLATE_LANG", "en_US")
+    # Welcome-on-registration (reuses RECEIPT_WEBHOOK_SECRET for auth).
+    WELCOME_TEMPLATE_NAME = os.getenv("WELCOME_TEMPLATE_NAME", "")
+    WELCOME_TEMPLATE_LANG = os.getenv("WELCOME_TEMPLATE_LANG", "en_US")
     # Maintenance mode — when true the bot replies with a notice instead of serving data.
     BOT_MAINTENANCE = os.getenv("BOT_MAINTENANCE", "false").strip().lower() in ("1", "true", "yes", "on")
     BOT_MAINTENANCE_MESSAGE = os.getenv(
