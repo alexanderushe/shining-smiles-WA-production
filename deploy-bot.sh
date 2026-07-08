@@ -3,9 +3,11 @@
 # deploy-bot.sh — build + (re)deploy the WhatsApp bot container to a box.
 #
 # Ships the build context (src/ + requirements.txt + Dockerfile.server + templates/)
-# to the target box, rebuilds the image there, recreates the container with the
-# box's existing /…/.env.bot, and verifies /healthz. The env file on the box is
-# the source of truth for secrets — this script never touches it.
+# to the target box, rebuilds the image there, then does a canary swap: the new
+# image is health-checked as a throwaway container on a temp port and only
+# promoted onto the live container once green — a broken build leaves the running
+# bot untouched. The env file on the box is the source of truth for secrets —
+# this script never touches it.
 #
 # Usage:
 #   ./deploy-bot.sh staging      # 167.233.206.105  -> wa-bot-staging
@@ -62,8 +64,39 @@ echo ">> [$TARGET] building image $IMG"
 $SSH "cd $DIR && docker build -f Dockerfile.server -t $IMG . >/tmp/wa-build.log 2>&1" \
   || { echo 'BUILD FAILED:'; $SSH 'tail -20 /tmp/wa-build.log'; exit 1; }
 
-echo ">> [$TARGET] recreating container $NAME"
-$SSH "docker rm -f $NAME >/dev/null 2>&1 || true; \
+# --- canary: prove the new image healthy BEFORE touching the live container ---
+# Boot the freshly built image as a throwaway container on a temp port (no
+# --restart, not on the nginx-facing $PORT so it takes no live traffic). If it
+# fails healthz, abort with the live $NAME still serving — a broken build can no
+# longer take the bot down. Only after the canary is green do we swap $PORT over.
+CANARY="${NAME}-canary"
+STAGE_PORT=$((PORT + 100))
+
+echo ">> [$TARGET] canary: validating new image on temp port $STAGE_PORT"
+$SSH "docker rm -f $CANARY >/dev/null 2>&1 || true; \
+      docker run -d --name $CANARY \
+        --network $NET -p 127.0.0.1:$STAGE_PORT:8080 \
+        --env-file $ENV_FILE $IMG >/dev/null"
+
+canary_ok=0
+for i in $(seq 1 10); do
+  sleep 2
+  code=$($SSH "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$STAGE_PORT/healthz" || echo 000)
+  if [ "$code" = "200" ]; then canary_ok=1; echo ">> canary healthy (attempt $i)"; break; fi
+done
+
+if [ "$canary_ok" != "1" ]; then
+  echo "ERROR: new image failed healthz as canary — LIVE $NAME left untouched. Canary logs:" >&2
+  $SSH "docker logs --tail 30 $CANARY; docker rm -f $CANARY >/dev/null 2>&1 || true"
+  exit 1
+fi
+
+# Canary good — tear it down and swap the validated image onto the live $PORT.
+# Brief (~2-3s) gap here while $NAME restarts; Meta retries webhooks so inbound
+# is not lost. The image is already proven, so the new container comes up clean.
+echo ">> [$TARGET] canary good — swapping into live $NAME"
+$SSH "docker rm -f $CANARY >/dev/null 2>&1 || true; \
+      docker rm -f $NAME >/dev/null 2>&1 || true; \
       docker run -d --name $NAME --restart unless-stopped \
         --network $NET -p 127.0.0.1:$PORT:8080 \
         --env-file $ENV_FILE $IMG >/dev/null"
@@ -78,6 +111,6 @@ for i in $(seq 1 10); do
   fi
 done
 
-echo "ERROR: $NAME did not become healthy — recent logs:" >&2
+echo "ERROR: $NAME did not become healthy after swap — recent logs:" >&2
 $SSH "docker logs --tail 30 $NAME"
 exit 1
