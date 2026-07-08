@@ -1,7 +1,6 @@
 # src/utils/ai_client.py - FIXED VERSION
 import os
 import json
-import boto3
 import requests
 import logging
 
@@ -16,26 +15,6 @@ def _get_openai_key():
     if _openai_key:
         return _openai_key
 
-    # Try Secrets Manager first
-    try:
-        client = boto3.client("secretsmanager", region_name="us-east-2")
-        secret = client.get_secret_value(SecretId="OPENAI_API_KEY")
-        secret_string = secret["SecretString"]
-        
-        # FIX: Handle both JSON string and plain string
-        try:
-            data = json.loads(secret_string)
-            _openai_key = data.get("OPENAI_API_KEY", secret_string)
-        except json.JSONDecodeError:
-            # If it's not JSON, use the string directly
-            _openai_key = secret_string
-            
-        logger.info("✅ OpenAI key loaded from Secrets Manager")
-        return _openai_key
-    except Exception as e:
-        logger.warning(f"Secrets Manager failed: {e}")
-
-    # Fallback to env var
     _openai_key = os.getenv("OPENAI_API_KEY")
     if _openai_key:
         logger.info("✅ OpenAI key loaded from environment")

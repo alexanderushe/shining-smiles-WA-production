@@ -1415,6 +1415,16 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 def process_cloud_api_message(message, metadata):
     """Process incoming WhatsApp Cloud API message using existing logic"""
     print("🎯 DEBUG: process_cloud_api_message ENTERED!")
+
+    # Drop inbound for phone_number_ids this bot is told to ignore (e.g. a shared
+    # test number whose webhook also reaches this app). Keeps prod from answering
+    # staging traffic and vice-versa.
+    from config import Config as _Cfg
+    _ignore = [x.strip() for x in (getattr(_Cfg, "IGNORE_PHONE_NUMBER_IDS", "") or "").split(",") if x.strip()]
+    if metadata and str((metadata or {}).get("phone_number_id", "")).strip() in _ignore:
+        print(f"🛑 Ignoring message for phone_number_id {(metadata or {}).get('phone_number_id')}")
+        return
+
     session = None
     try:
         request_id = str(uuid.uuid4())

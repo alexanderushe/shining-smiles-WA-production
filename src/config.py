@@ -37,6 +37,9 @@ class Config:
     # Welcome-on-registration (reuses RECEIPT_WEBHOOK_SECRET for auth).
     WELCOME_TEMPLATE_NAME = os.getenv("WELCOME_TEMPLATE_NAME", "")
     WELCOME_TEMPLATE_LANG = os.getenv("WELCOME_TEMPLATE_LANG", "en_US")
+    # Comma-separated phone_number_ids this bot should ignore (e.g. a shared test
+    # number whose webhook also reaches this app). Inbound for these is dropped.
+    IGNORE_PHONE_NUMBER_IDS = os.getenv("IGNORE_PHONE_NUMBER_IDS", "")
     # Maintenance mode — when true the bot replies with a notice instead of serving data.
     BOT_MAINTENANCE = os.getenv("BOT_MAINTENANCE", "false").strip().lower() in ("1", "true", "yes", "on")
     BOT_MAINTENANCE_MESSAGE = os.getenv(

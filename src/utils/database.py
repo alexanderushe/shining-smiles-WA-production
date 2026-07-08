@@ -13,7 +13,6 @@ from sqlalchemy import (
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
-import boto3
 import datetime
 import json
 import os
@@ -224,43 +223,18 @@ def get_user_state(session, phone_number, school_id=None):
 
 
 def get_secret(secret_name):
-    """Retrieve secret from AWS Secrets Manager with fallback to env var."""
-    import signal
-    from botocore.config import Config
-
-    def timeout_handler(signum, frame):
-        raise TimeoutError("Secrets Manager call timed out after 15 seconds")
-
-    config = Config(connect_timeout=10, read_timeout=10, retries={"max_attempts": 1})
-    client = boto3.client("secretsmanager", region_name="us-east-2", config=config)
-
-    signal.signal(signal.SIGALRM, timeout_handler)
-    signal.alarm(15)
-
-    try:
-        logger.info("Fetching secret with 15s hard timeout...")
-        response = client.get_secret_value(SecretId=secret_name)
-        signal.alarm(0)
-        logger.info("Secret fetched successfully")
-        return json.loads(response["SecretString"])
-    except TimeoutError as exc:
-        signal.alarm(0)
-        logger.error(f"Secret fetch TIMED OUT: {str(exc)}")
-        raise
-    except Exception as exc:
-        signal.alarm(0)
-        logger.warning(f"Secret fetch failed (using fallback DATABASE_URL): {str(exc)}")
-        db_url = os.getenv("DATABASE_URL")
-        if db_url:
-            parsed = urlparse(db_url)
-            return {
-                "username": parsed.username,
-                "password": parsed.password,
-                "host": parsed.hostname,
-                "port": parsed.port or 5432,
-                "dbname": parsed.path.lstrip("/"),
-            }
-        raise
+    """Return DB credentials parsed from the DATABASE_URL env var."""
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL is not set")
+    parsed = urlparse(db_url)
+    return {
+        "username": parsed.username,
+        "password": parsed.password,
+        "host": parsed.hostname,
+        "port": parsed.port or 5432,
+        "dbname": parsed.path.lstrip("/"),
+    }
 
 
 def init_db():
