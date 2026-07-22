@@ -166,20 +166,22 @@ def _account_balance_headline(balance, bold=False):
 
 
 def _render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills, term=None):
-    """Parent-facing per-student balance block. `balance` is the canonical account
-    balance (or `None` when the lookup failed). The account balance is the headline
-    truth; the term's fees/payments are shown only as context, never subtracted
-    against the account balance (they live at different scopes)."""
+    """Parent-facing per-student balance. Shows only the canonical *account* balance
+    — the running total across all terms (including brought-forward prior-term
+    arrears) after payments and credits. This is the single figure that reconciles
+    and matches the admin app. Per-term gross fees/payments are deliberately NOT
+    shown: with arrears rolled into the current term's invoice and account-level
+    credit notes, they don't reconcile and mislead parents. `total_fees`/`total_paid`
+    are accepted for signature stability but unused; a full itemised picture is
+    available via the `statement` reply."""
     if balance is None:
         return f"*{student_id} ({student_name})*: {BALANCE_UNAVAILABLE}"
-    term_label = f"Term {term}" if term else "This term"
     if not has_bills:
-        return f"*{student_id} ({student_name})*: No fees recorded for {term_label.lower()}"
-    context = f"  {term_label}: billed ${total_fees:.2f}, paid ${total_paid:.2f}"
+        return f"*{student_id} ({student_name})*: No fees recorded"
     return (
         f"*{student_id} ({student_name})*:\n"
         f"  {_account_balance_headline(balance, bold=True)}\n"
-        f"{context}"
+        f"  _all terms, after payments & credits_"
     )
 
 
@@ -479,10 +481,10 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                     else:
                         response_text = (
                             f"📊 *Hi {fullname},*\n{prefix_message}\n" +
-                            "\n\n".join(balance_texts) + 
-                            f"\n\n💡 View other terms? Reply with term code (e.g., *2026-2*, *2026-1*)\n{menu_text}"
+                            "\n\n".join(balance_texts) +
+                            f"\n\n💬 *Want a full breakdown?* Reply *statement*\n{menu_text}"
                         )
-                    
+
                     user_state.state = "main_menu"
                     user_state.last_updated = current_time
                     session.commit()

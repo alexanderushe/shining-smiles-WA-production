@@ -46,24 +46,25 @@ def test_unavailable_notice_when_balance_none():
     assert "$300" not in line and "$0.00" not in line  # no number invented
 
 
-def test_summary_headline_is_account_balance_not_fees_minus_paid():
-    # The incident: term fees 490 / paid 190 but the account is settled ($0).
-    # Headline must be the account balance; the $300 fees-minus-paid must never show,
-    # and term fees/paid appear only as context (not subtracted against the balance).
+def test_summary_shows_only_account_balance_no_per_term_gross():
+    # Account is settled ($0) even though this term's gross is 490 billed / 190 paid.
+    # Only the reconciled account headline shows; per-term gross is dropped entirely
+    # (it can't reconcile once arrears roll forward + credit notes apply).
     line = wh._render_balance_line(
         "SSC20257990", "Shanice Karamba",
         total_fees=490.0, total_paid=190.0, balance=0.0, has_bills=True, term="2026-1",
     )
     assert "Account settled" in line
-    assert "$0.00 owed" in line
-    assert "Term 2026-1: billed $490.00, paid $190.00" in line   # context only
-    assert "$300" not in line                                    # no phantom, no artifact
+    assert "all terms" in line
+    assert "billed" not in line and "$490" not in line and "$190" not in line  # no gross
+    assert "$300" not in line
 
 
 def test_summary_line_real_debtor_still_flagged():
     line = wh._render_balance_line("S2", "Owing Kid", 500.0, 200.0, balance=300.0, has_bills=True, term="2026-1")
     assert "Account balance owed: $300.00" in line
     assert "settled" not in line.lower()
+    assert "billed" not in line  # still no per-term gross
 
 
 def test_statement_block_account_headline_with_term_detail():
