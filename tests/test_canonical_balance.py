@@ -76,5 +76,61 @@ def test_statement_block_account_headline_with_term_detail():
     assert "$300" not in stmt
 
 
+# --------------------------------------------------------------------------
+# Phone->student cache self-healing (TTL + reconcile). Fixes the stale-mapping
+# bug: a number moved/removed in the SaaS must stop resolving to the old student.
+# --------------------------------------------------------------------------
+import datetime as _dt
+import types
+
+
+class FakeContact:
+    def __init__(self, student_id, student_mobile=None, guardian="", preferred=None, last_updated=None):
+        self.student_id = student_id
+        self.student_mobile = student_mobile
+        self.guardian_mobile_number = guardian
+        self.preferred_phone_number = preferred
+        self.last_updated = last_updated
+
+
+def test_cache_is_stale():
+    now = _dt.datetime.now(_dt.timezone.utc)
+    assert wh._cache_is_stale([FakeContact("A", last_updated=now)]) is False
+    old = now - wh.CONTACT_CACHE_TTL - _dt.timedelta(seconds=1)
+    assert wh._cache_is_stale([FakeContact("A", last_updated=old)]) is True
+    assert wh._cache_is_stale([FakeContact("A", last_updated=None)]) is True          # never synced
+    naive = _dt.datetime.utcnow()  # naive row is treated as UTC, still fresh
+    assert wh._cache_is_stale([FakeContact("A", last_updated=naive)]) is False
+
+
+def test_strip_phone_from_contact():
+    p = "+263779453582"
+    c = FakeContact("A", student_mobile=p, guardian=p, preferred=p)
+    assert wh._strip_phone_from_contact(c, p) is True
+    assert c.student_mobile is None and c.guardian_mobile_number == "" and c.preferred_phone_number is None
+    other = FakeContact("B", student_mobile="+263771111111", guardian="+263772222222")
+    assert wh._strip_phone_from_contact(other, p) is False   # nothing matched, untouched
+
+
+def test_reconcile_moves_number_off_old_student(monkeypatch):
+    p = "+263779453582"
+    old = FakeContact("SSC-OLD", student_mobile=p, guardian=p, preferred=p,
+                      last_updated=_dt.datetime.now(_dt.timezone.utc))
+    hydrated = []
+    monkeypatch.setattr(wh, "find_contacts_by_phone",
+                        lambda s, phone, school_id=None: [old] if p in
+                        (old.student_mobile, old.guardian_mobile_number, old.preferred_phone_number) else [])
+    monkeypatch.setattr(wh, "update_or_create_contact",
+                        lambda session, sid, profile, balance, school_id=None: hydrated.append(sid))
+    client = types.SimpleNamespace(get_student_profile=lambda sid: {"data": {"student_mobile": p}})
+    session = types.SimpleNamespace(commit=lambda: None)
+
+    # SaaS now maps the number to SSC-NEW only (it was moved off SSC-OLD).
+    wh._reconcile_phone_cache(session, p, [{"student_id": "SSC-NEW", "outstanding_balance": "0"}], None, client)
+
+    assert old.student_mobile is None and old.guardian_mobile_number == ""  # stripped off old
+    assert hydrated == ["SSC-NEW"]                                          # new hydrated
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

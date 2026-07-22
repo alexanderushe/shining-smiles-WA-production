@@ -22,7 +22,7 @@ import uuid
 import re
 import requests
 from flask import Flask, request, jsonify
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 
 print("🎯 DEBUG: All imports successful!")
 
@@ -69,6 +69,68 @@ BALANCE_UNAVAILABLE = (
     "balance right now. Please try again shortly or contact "
     "_admin@shiningsmilescollege.ac.zw_."
 )
+
+
+# How long a cached phone->student mapping is trusted before it is re-checked
+# against the SaaS. The SaaS is the source of truth; the local student_contacts
+# table is only a fast path. Bounds how long a number moved/removed in the admin
+# app can keep resolving to a stale student. Override with CONTACT_CACHE_TTL_HOURS.
+CONTACT_CACHE_TTL = timedelta(hours=int(os.getenv("CONTACT_CACHE_TTL_HOURS", "12")))
+
+
+def _cache_is_stale(contacts):
+    """True if any matched contact is missing a sync time or older than the TTL,
+    signalling the phone->student mapping should be re-resolved from the SaaS."""
+    now = datetime.now(timezone.utc)
+    for contact in contacts:
+        last = getattr(contact, "last_updated", None)
+        if last is None:
+            return True
+        if last.tzinfo is None:                       # naive rows -> assume UTC
+            last = last.replace(tzinfo=timezone.utc)
+        if now - last > CONTACT_CACHE_TTL:
+            return True
+    return False
+
+
+def _strip_phone_from_contact(contact, phone):
+    """Remove `phone` from whichever columns of a cached contact carry it, so the
+    number stops resolving to a student the SaaS no longer maps it to. Returns True
+    if anything changed. guardian_mobile_number is NOT NULL, so it is blanked to ''."""
+    changed = False
+    if contact.student_mobile == phone:
+        contact.student_mobile = None
+        changed = True
+    if contact.guardian_mobile_number == phone:
+        contact.guardian_mobile_number = ""
+        changed = True
+    if contact.preferred_phone_number == phone:
+        contact.preferred_phone_number = None
+        changed = True
+    return changed
+
+
+def _reconcile_phone_cache(session, phone, resolved_students, school_id, sms_client):
+    """Make the local cache agree with the SaaS for `phone`. Any cached contact the
+    SaaS no longer maps this number to has the number stripped (it moved away or was
+    removed); every student the SaaS *does* map it to is (re)hydrated. SaaS is
+    authoritative — this is the piece that lets an admin-app number change take
+    effect without a manual cache edit."""
+    resolved = {s.get("student_id"): s for s in resolved_students if s.get("student_id")}
+    dirty = False
+    for contact in find_contacts_by_phone(session, phone, school_id=school_id):
+        if contact.student_id not in resolved and _strip_phone_from_contact(contact, phone):
+            contact.last_updated = datetime.now(timezone.utc)
+            dirty = True
+    if dirty:
+        session.commit()
+    for student_id, student in resolved.items():
+        profile = sms_client.get_student_profile(student_id)
+        if not profile or "data" not in profile:
+            logger.warning("Profile fetch failed reconciling %s for %s", student_id, phone)
+            continue
+        balance = float(student.get("outstanding_balance") or 0)
+        update_or_create_contact(session, student_id, profile["data"], balance, school_id=school_id)
 
 
 def _canonical_balance(sms_client, student_id, term, account=None):
@@ -242,41 +304,29 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
         if user_state.query_count >= 5:
             return f"⚠️ *Daily query limit reached.* Please try again tomorrow or contact _admin@shiningsmilescollege.ac.zw_.\n{unregistered_prompt}"
 
-    # Query all contacts associated with the phone number. If the local cache is
-    # cold post-W2.4, fall back to the live SaaS phone resolver and hydrate cache.
+    # Resolve the phone -> student(s). The local student_contacts table is a fast
+    # cache; the SaaS is the source of truth. We re-resolve against the SaaS when the
+    # cache is cold OR past its TTL, then reconcile — so a number moved or removed in
+    # the admin app self-heals instead of serving a stale student. A warm cache
+    # (< TTL) takes the fast path and makes no extra API calls.
     contacts = find_contacts_by_phone(session, whatsapp_number, school_id=school_id)
-    if not contacts:
+    if not contacts or _cache_is_stale(contacts):
         try:
             resolved = sms_client.resolve_by_phone(whatsapp_number)
             resolved_students = resolved.get("students", []) if isinstance(resolved, dict) else []
-            if resolved_students:
-                logger.info(
-                    f"Resolved {len(resolved_students)} student(s) from SaaS for {whatsapp_number}",
-                    extra={"request_id": request_id, "school_id": school_id},
-                )
-                for student in resolved_students:
-                    student_id = student.get("student_id")
-                    if not student_id:
-                        continue
-                    profile = sms_client.get_student_profile(student_id)
-                    if not profile or "data" not in profile:
-                        logger.warning(
-                            f"Profile fetch failed after phone resolve for {student_id}",
-                            extra={"request_id": request_id, "school_id": school_id},
-                        )
-                        continue
-                    balance = float(student.get("outstanding_balance") or 0)
-                    update_or_create_contact(
-                        session,
-                        student_id,
-                        profile["data"],
-                        balance,
-                        school_id=school_id,
-                    )
-                contacts = find_contacts_by_phone(session, whatsapp_number, school_id=school_id)
+            logger.info(
+                "Resolved %d student(s) from SaaS for %s (cache %s)",
+                len(resolved_students), whatsapp_number,
+                "cold" if not contacts else "stale",
+                extra={"request_id": request_id, "school_id": school_id},
+            )
+            _reconcile_phone_cache(session, whatsapp_number, resolved_students, school_id, sms_client)
+            contacts = find_contacts_by_phone(session, whatsapp_number, school_id=school_id)
         except Exception as resolve_error:
+            # SaaS unreachable — keep whatever cache we already have rather than
+            # dropping the user. Never wipe the cache on a failed resolve.
             logger.error(
-                f"Phone resolve fallback failed for {whatsapp_number}: {resolve_error}",
+                f"Phone resolve/reconcile failed for {whatsapp_number}: {resolve_error}",
                 extra={"request_id": request_id, "school_id": school_id},
             )
     
