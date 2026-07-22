@@ -90,59 +90,51 @@ def _canonical_balance(sms_client, student_id, term, account=None):
     return None
 
 
-def _account_adjustment(total_fees, total_paid, balance):
-    """Credits/adjustments the account carries that the raw fees-vs-payments math
-    can't see (write-offs, credit notes, prepaid credit). Returns the positive
-    reconciler so `fees − paid − adjustment == balance`, else 0.0."""
-    adjustment = total_fees - total_paid - balance
-    return adjustment if adjustment > 0.01 else 0.0
+def _account_balance_headline(balance, bold=False):
+    """The authoritative, account-wide balance line. `balance` is the canonical
+    SaaS outstanding (nets all terms + credits), so it is deliberately shown as an
+    *account* figure, not a per-term one — a single term's fees/payments are only
+    context. Keeps the bot's headline number identical to the admin app."""
+    owed = f"*Account balance owed: ${balance:.2f}*" if bold else f"Account balance owed: ${balance:.2f}"
+    if balance < -0.01:
+        return f"💰 Account in credit: ${abs(balance):.2f}"
+    if balance <= 0.01:
+        return "✅ Account settled — $0.00 owed"
+    return f"💰 {owed}"
 
 
-def _render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills):
-    """Parent-facing per-student balance block. `balance` must be the canonical
-    account balance (see `_canonical_balance`). A Credits/Adjustments line is added
-    when present so the displayed numbers always reconcile to the balance."""
+def _render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills, term=None):
+    """Parent-facing per-student balance block. `balance` is the canonical account
+    balance (or `None` when the lookup failed). The account balance is the headline
+    truth; the term's fees/payments are shown only as context, never subtracted
+    against the account balance (they live at different scopes)."""
     if balance is None:
         return f"*{student_id} ({student_name})*: {BALANCE_UNAVAILABLE}"
+    term_label = f"Term {term}" if term else "This term"
     if not has_bills:
-        return f"*{student_id} ({student_name})*: No fees recorded"
-    adjustment = _account_adjustment(total_fees, total_paid, balance)
-    money = (
-        f"  Total Fees: ${total_fees:.2f}\n"
-        f"  Total Paid: ${total_paid:.2f}\n"
+        return f"*{student_id} ({student_name})*: No fees recorded for {term_label.lower()}"
+    context = f"  {term_label}: billed ${total_fees:.2f}, paid ${total_paid:.2f}"
+    return (
+        f"*{student_id} ({student_name})*:\n"
+        f"  {_account_balance_headline(balance, bold=True)}\n"
+        f"{context}"
     )
-    if adjustment:
-        money += f"  Credits/Adjustments: ${adjustment:.2f}\n"
-    if balance < -0.01:
-        return f"*{student_id} ({student_name})*:\n{money}  Account Credit: ${abs(balance):.2f} 💰"
-    if balance <= 0.01:
-        return f"*{student_id} ({student_name})*: Fully settled ✅\n{money}  *Balance Owed: $0.00*"
-    return f"*{student_id} ({student_name})*:\n{money}  *Balance Owed: ${balance:.2f}*"
 
 
 def _render_statement_block(student_id, student_name, term, total_fees, total_paid, balance, fee_details, payment_details):
-    """Detailed statement block. `balance` is the canonical account balance, or
-    `None` when the lookup failed (we show an unavailable notice, never a guess)."""
+    """Detailed statement block. Account balance is the headline (whole-account,
+    matches the app); the requested term's fees/payments are shown as detail. On a
+    failed lookup we show an unavailable notice, never a guessed number."""
     if balance is None:
-        return f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n{BALANCE_UNAVAILABLE}"
-    adjustment = _account_adjustment(total_fees, total_paid, balance)
-    if balance > 0.01:
-        balance_label = f"*Balance Owed*: ${balance:.2f}"
-    elif balance < -0.01:
-        balance_label = f"*Account Credit*: ${abs(balance):.2f}"
-    else:
-        balance_label = "*Status*: ✅ *Fully Settled*"
-    good_news = "*Great news!* Your account is *fully settled*.\n" if -0.01 <= balance <= 0.01 else ""
-    adjustment_line = f"*Credits/Adjustments*: ${adjustment:.2f}\n" if adjustment else ""
+        return f"*Account Statement for {student_id} ({student_name})*:\n{BALANCE_UNAVAILABLE}"
     return (
-        f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
-        f"{good_news}"
-        f"*Total Fees*: ${total_fees:.2f}\n"
-        f"*Total Paid*: ${total_paid:.2f}\n"
-        f"{adjustment_line}"
-        f"{balance_label}\n"
+        f"*Account Statement for {student_id} ({student_name})*:\n"
+        f"{_account_balance_headline(balance)}\n"
+        f"\n*Term {term} detail:*\n"
+        f"*Fees billed*: ${total_fees:.2f}\n"
+        f"*Payments*: ${total_paid:.2f}\n"
         f"*Fees Charged*:\n{fee_details}\n"
-        f"*Payments*:\n{payment_details}"
+        f"*Payments made*:\n{payment_details}"
     )
 
 
@@ -426,7 +418,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                         student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
                         has_bills = bool(billed_fees.get("data", {}).get("bills"))
-                        balance_texts.append(_render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills))
+                        balance_texts.append(_render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills, term=term))
 
                     if not balance_texts:
                         response_text = (
@@ -1062,7 +1054,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                         student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
                         has_bills = bool(billed_fees.get("data", {}).get("bills"))
-                        balance_texts.append(_render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills))
+                        balance_texts.append(_render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills, term=term))
 
                     if not balance_texts:
                         response_text = (
@@ -1220,7 +1212,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                         student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
                         has_bills = bool(billed_fees.get("data", {}).get("bills"))
-                        balance_texts.append(_render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills))
+                        balance_texts.append(_render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills, term=term))
 
                     if not balance_texts:
                         response_text = (
@@ -1279,7 +1271,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                             student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
                             has_bills = bool(billed_fees.get("data", {}).get("bills"))
-                            balance_texts.append(_render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills))
+                            balance_texts.append(_render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills, term=term))
 
                         if not balance_texts:
                             response_text = f"📊 *Hi {fullname},*\nNo fees recorded for any students in term *{term}*. Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"

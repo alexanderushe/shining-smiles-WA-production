@@ -41,35 +41,39 @@ def test_returns_none_when_lookup_fails():
 
 
 def test_unavailable_notice_when_balance_none():
-    line = wh._render_balance_line("X", "Kid", 490.0, 190.0, balance=None, has_bills=True)
+    line = wh._render_balance_line("X", "Kid", 490.0, 190.0, balance=None, has_bills=True, term="2026-1")
     assert "temporarily unavailable" in line.lower()
     assert "$300" not in line and "$0.00" not in line  # no number invented
 
 
-def test_summary_line_settled_and_reconciled():
+def test_summary_headline_is_account_balance_not_fees_minus_paid():
+    # The incident: term fees 490 / paid 190 but the account is settled ($0).
+    # Headline must be the account balance; the $300 fees-minus-paid must never show,
+    # and term fees/paid appear only as context (not subtracted against the balance).
     line = wh._render_balance_line(
         "SSC20257990", "Shanice Karamba",
-        total_fees=490.0, total_paid=190.0, balance=0.0, has_bills=True,
+        total_fees=490.0, total_paid=190.0, balance=0.0, has_bills=True, term="2026-1",
     )
-    assert "Fully settled" in line
-    assert "Balance Owed: $0.00" in line
-    assert "Credits/Adjustments: $300.00" in line          # numbers reconcile
-    assert "Balance Owed: $300.00" not in line              # no false alarm
+    assert "Account settled" in line
+    assert "$0.00 owed" in line
+    assert "Term 2026-1: billed $490.00, paid $190.00" in line   # context only
+    assert "$300" not in line                                    # no phantom, no artifact
 
 
 def test_summary_line_real_debtor_still_flagged():
-    line = wh._render_balance_line("S2", "Owing Kid", 500.0, 200.0, balance=300.0, has_bills=True)
-    assert "Balance Owed: $300.00" in line
-    assert "Fully settled" not in line
+    line = wh._render_balance_line("S2", "Owing Kid", 500.0, 200.0, balance=300.0, has_bills=True, term="2026-1")
+    assert "Account balance owed: $300.00" in line
+    assert "settled" not in line.lower()
 
 
-def test_statement_block_reconciles():
+def test_statement_block_account_headline_with_term_detail():
     stmt = wh._render_statement_block(
         "SSC20257990", "Shanice Karamba", "2026-1",
         490.0, 190.0, 0.0, "- $490.00 (Tuition)", "- $190.00 (Cash)",
     )
-    assert "Fully Settled" in stmt
-    assert "Credits/Adjustments*: $300.00" in stmt
+    assert "Account settled" in stmt
+    assert "Term 2026-1 detail" in stmt
+    assert "$300" not in stmt
 
 
 if __name__ == "__main__":
