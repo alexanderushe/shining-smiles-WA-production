@@ -60,6 +60,92 @@ config = get_config() if 'get_config' in locals() else config
 
 print("🎯 DEBUG: Logger and config setup complete!")
 
+
+# Shown to a parent when we cannot get the authoritative balance. We deliberately
+# never fall back to a locally-computed number — a guessed balance is how a wrong
+# figure reaches a parent. Better to say "unavailable" than to invent one.
+BALANCE_UNAVAILABLE = (
+    "⚠️ *Balance temporarily unavailable.* We're unable to confirm your account "
+    "balance right now. Please try again shortly or contact "
+    "_admin@shiningsmilescollege.ac.zw_."
+)
+
+
+def _canonical_balance(sms_client, student_id, term, account=None):
+    """Authoritative account balance = the SaaS `outstanding_balance`, which nets
+    credit notes, exemptions and available (prepaid) credit. This is the single
+    figure the admin app shows, so sourcing it here stops the bot ever
+    contradicting the app. Returns `None` when the lookup fails or the payload has
+    no balance — callers must then show `BALANCE_UNAVAILABLE`, never a guess.
+    """
+    try:
+        if account is None:
+            account = sms_client.get_student_account_statement(student_id, term)
+        bal = (account or {}).get("data", {}).get("balance")
+        if bal is not None:
+            return float(bal)
+        logger.warning("Statement for %s term %s had no balance field", student_id, term)
+    except Exception as exc:  # noqa: BLE001 - never let a balance lookup 500 the bot
+        logger.warning("Canonical balance lookup failed for %s term %s (%s)", student_id, term, exc)
+    return None
+
+
+def _account_adjustment(total_fees, total_paid, balance):
+    """Credits/adjustments the account carries that the raw fees-vs-payments math
+    can't see (write-offs, credit notes, prepaid credit). Returns the positive
+    reconciler so `fees − paid − adjustment == balance`, else 0.0."""
+    adjustment = total_fees - total_paid - balance
+    return adjustment if adjustment > 0.01 else 0.0
+
+
+def _render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills):
+    """Parent-facing per-student balance block. `balance` must be the canonical
+    account balance (see `_canonical_balance`). A Credits/Adjustments line is added
+    when present so the displayed numbers always reconcile to the balance."""
+    if balance is None:
+        return f"*{student_id} ({student_name})*: {BALANCE_UNAVAILABLE}"
+    if not has_bills:
+        return f"*{student_id} ({student_name})*: No fees recorded"
+    adjustment = _account_adjustment(total_fees, total_paid, balance)
+    money = (
+        f"  Total Fees: ${total_fees:.2f}\n"
+        f"  Total Paid: ${total_paid:.2f}\n"
+    )
+    if adjustment:
+        money += f"  Credits/Adjustments: ${adjustment:.2f}\n"
+    if balance < -0.01:
+        return f"*{student_id} ({student_name})*:\n{money}  Account Credit: ${abs(balance):.2f} 💰"
+    if balance <= 0.01:
+        return f"*{student_id} ({student_name})*: Fully settled ✅\n{money}  *Balance Owed: $0.00*"
+    return f"*{student_id} ({student_name})*:\n{money}  *Balance Owed: ${balance:.2f}*"
+
+
+def _render_statement_block(student_id, student_name, term, total_fees, total_paid, balance, fee_details, payment_details):
+    """Detailed statement block. `balance` is the canonical account balance, or
+    `None` when the lookup failed (we show an unavailable notice, never a guess)."""
+    if balance is None:
+        return f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n{BALANCE_UNAVAILABLE}"
+    adjustment = _account_adjustment(total_fees, total_paid, balance)
+    if balance > 0.01:
+        balance_label = f"*Balance Owed*: ${balance:.2f}"
+    elif balance < -0.01:
+        balance_label = f"*Account Credit*: ${abs(balance):.2f}"
+    else:
+        balance_label = "*Status*: ✅ *Fully Settled*"
+    good_news = "*Great news!* Your account is *fully settled*.\n" if -0.01 <= balance <= 0.01 else ""
+    adjustment_line = f"*Credits/Adjustments*: ${adjustment:.2f}\n" if adjustment else ""
+    return (
+        f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
+        f"{good_news}"
+        f"*Total Fees*: ${total_fees:.2f}\n"
+        f"*Total Paid*: ${total_paid:.2f}\n"
+        f"{adjustment_line}"
+        f"{balance_label}\n"
+        f"*Fees Charged*:\n{fee_details}\n"
+        f"*Payments*:\n{payment_details}"
+    )
+
+
 def _cloud_credentials():
     tenant = get_current_tenant() if 'get_current_tenant' in globals() else {}
     token = tenant.get("whatsapp_cloud_api_token") or os.getenv("WHATSAPP_CLOUD_API_TOKEN")
@@ -336,32 +422,11 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                         total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
                         total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
-                        balance = total_fees - total_paid
+                        balance = _canonical_balance(sms_client, student_id, term)
 
                         student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
-                        if not billed_fees.get("data", {}).get("bills"):
-                            balance_texts.append(f"*{student_id} ({student_name})*: No fees recorded")
-                        elif balance == 0.0 and total_fees > 0.0:
-                            balance_texts.append(
-                                f"*{student_id} ({student_name})*: Fully paid ✅\n"
-                                f"  Total Fees: ${total_fees:.2f}\n"
-                                f"  Total Paid: ${total_paid:.2f}"
-                            )
-                        elif balance < 0:
-                            # Overpayment / Credit
-                            balance_texts.append(
-                                f"*{student_id} ({student_name})*:\n"
-                                f"  Total Fees: ${total_fees:.2f}\n"
-                                f"  Total Paid: ${total_paid:.2f}\n"
-                                f"  Credit: ${abs(balance):.2f} 💰"
-                            )
-                        else:
-                            balance_texts.append(
-                                f"*{student_id} ({student_name})*:\n"
-                                f"  Total Fees: ${total_fees:.2f}\n"
-                                f"  Total Paid: ${total_paid:.2f}\n"
-                                f"  Balance Owed: ${balance:.2f}"
-                            )
+                        has_bills = bool(billed_fees.get("data", {}).get("bills"))
+                        balance_texts.append(_render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills))
 
                     if not balance_texts:
                         response_text = (
@@ -427,7 +492,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                         total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
                         total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
-                        balance = total_fees - total_paid
+                        balance = _canonical_balance(sms_client, student_id, default_term, account=account)
 
                         student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
                         if not billed_fees.get("data", {}).get("bills"):
@@ -447,21 +512,9 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                 if billed_fees.get("data", {}).get("bills")
                                 else "No fees recorded."
                             )
-                            # Determine balance label
-                            if balance > 0:
-                                balance_label = f"*Balance Owed*: ${balance:.2f}"
-                            elif balance < 0:
-                                balance_label = f"*Credit/Overpayment*: ${abs(balance):.2f}"
-                            else:
-                                balance_label = "*Status*: ✅ *Fully Paid*"
-                            
-                            statement_text = (
-                                f"*Account Statement for {student_id} ({student_name}, Term {default_term})*:\n"
-                                f"*Total Fees*: ${total_fees:.2f}\n"
-                                f"*Total Paid*: ${total_paid:.2f}\n"
-                                f"{balance_label}\n"
-                                f"*Fees Charged*:\n{fee_details}\n"
-                                f"*Payments*:\n{payment_details}"
+                            statement_text = _render_statement_block(
+                                student_id, student_name, default_term,
+                                total_fees, total_paid, balance, fee_details, payment_details,
                             )
 
                             # Truncate if too long
@@ -1005,32 +1058,11 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                         total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
                         total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
-                        balance = total_fees - total_paid
+                        balance = _canonical_balance(sms_client, student_id, term)
 
                         student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
-                        if not billed_fees.get("data", {}).get("bills"):
-                            balance_texts.append(f"*{student_id} ({student_name})*: No fees recorded")
-                        elif balance == 0.0 and total_fees > 0.0:
-                            balance_texts.append(
-                                f"*{student_id} ({student_name})*: Fully paid ✅\n"
-                                f"  Total Fees: ${total_fees:.2f}\n"
-                                f"  Total Paid: ${total_paid:.2f}"
-                            )
-                        elif balance < 0:
-                            # Overpayment / Credit
-                            balance_texts.append(
-                                f"*{student_id} ({student_name})*:\n"
-                                f"  Total Fees: ${total_fees:.2f}\n"
-                                f"  Total Paid: ${total_paid:.2f}\n"
-                                f"  Credit: ${abs(balance):.2f} 💰"
-                            )
-                        else:
-                            balance_texts.append(
-                                f"*{student_id} ({student_name})*:\n"
-                                f"  Total Fees: ${total_fees:.2f}\n"
-                                f"  Total Paid: ${total_paid:.2f}\n"
-                                f"  Balance Owed: ${balance:.2f}"
-                            )
+                        has_bills = bool(billed_fees.get("data", {}).get("bills"))
+                        balance_texts.append(_render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills))
 
                     if not balance_texts:
                         response_text = (
@@ -1080,7 +1112,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                             total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
                             total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
-                            balance = total_fees - total_paid
+                            balance = _canonical_balance(sms_client, student_id, term, account=account)
 
                             student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
                             if not billed_fees.get("data", {}).get("bills"):
@@ -1100,29 +1132,9 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                     if billed_fees.get("data", {}).get("bills")
                                     else "No fees recorded."
                                 )
-                                # Determine balance label
-                                if balance > 0:
-                                    balance_label = f"*Balance Owed*: ${balance:.2f}"
-                                elif balance < 0:
-                                    balance_label = f"*Credit/Overpayment*: ${abs(balance):.2f}"
-                                else:
-                                    balance_label = "*Status*: ✅ *Fully Paid*"
-
-                                statement_text = (
-                                    f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
-                                    f"*Total Fees*: ${total_fees:.2f}\n"
-                                    f"*Total Paid*: ${total_paid:.2f}\n"
-                                    f"{balance_label}\n"
-                                    f"*Fees Charged*:\n{fee_details}\n"
-                                    f"*Payments*:\n{payment_details}"
-                                ) if balance != 0.0 or total_fees <= 0.0 else (
-                                    f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
-                                    f"*Great news!* Balance is *fully paid*.\n"
-                                    f"*Total Fees*: ${total_fees:.2f}\n"
-                                    f"*Total Paid*: ${total_paid:.2f}\n"
-                                    f"{balance_label}\n"
-                                    f"*Fees Charged*:\n{fee_details}\n"
-                                    f"*Payments*:\n{payment_details}"
+                                statement_text = _render_statement_block(
+                                    student_id, student_name, term,
+                                    total_fees, total_paid, balance, fee_details, payment_details,
                                 )
 
                                 if len(statement_text) > max_message_length:
@@ -1204,32 +1216,11 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                         total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
                         total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
-                        balance = total_fees - total_paid
+                        balance = _canonical_balance(sms_client, student_id, term)
 
                         student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
-                        if not billed_fees.get("data", {}).get("bills"):
-                            balance_texts.append(f"*{student_id} ({student_name})*: No fees recorded")
-                        elif balance == 0.0 and total_fees > 0.0:
-                            balance_texts.append(
-                                f"*{student_id} ({student_name})*: Fully paid ✅\n"
-                                f"  Total Fees: ${total_fees:.2f}\n"
-                                f"  Total Paid: ${total_paid:.2f}"
-                            )
-                        elif balance < 0:
-                            # Overpayment / Credit
-                            balance_texts.append(
-                                f"*{student_id} ({student_name})*:\n"
-                                f"  Total Fees: ${total_fees:.2f}\n"
-                                f"  Total Paid: ${total_paid:.2f}\n"
-                                f"  Credit: ${abs(balance):.2f} 💰"
-                            )
-                        else:
-                            balance_texts.append(
-                                f"*{student_id} ({student_name})*:\n"
-                                f"  Total Fees: ${total_fees:.2f}\n"
-                                f"  Total Paid: ${total_paid:.2f}\n"
-                                f"  Balance Owed: ${balance:.2f}"
-                            )
+                        has_bills = bool(billed_fees.get("data", {}).get("bills"))
+                        balance_texts.append(_render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills))
 
                     if not balance_texts:
                         response_text = (
@@ -1284,26 +1275,11 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                             total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
                             total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
-                            balance = total_fees - total_paid
+                            balance = _canonical_balance(sms_client, student_id, term, account=account)
 
                             student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
-                            if not billed_fees.get("data", {}).get("bills"):
-                                balance_texts.append(f"*No fees recorded for {student_id} ({student_name}) in term {term}.*")
-                            elif balance == 0.0 and total_fees > 0.0:
-                                balance_texts.append(
-                                    f"*Balance for {student_id} ({student_name}, Term {term})*:\n"
-                                    f"*Great news!* Balance is *fully paid*.\n"
-                                    f"*Total Fees*: ${total_fees:.2f}\n"
-                                    f"*Total Paid*: ${total_paid:.2f}\n"
-                                    f"*Balance Owed*: ${balance:.2f}"
-                                )
-                            else:
-                                balance_texts.append(
-                                    f"*Balance for {student_id} ({student_name}, Term {term})*:\n"
-                                    f"*Total Fees*: ${total_fees:.2f}\n"
-                                    f"*Total Paid*: ${total_paid:.2f}\n"
-                                    f"*Balance Owed*: ${balance:.2f}"
-                                )
+                            has_bills = bool(billed_fees.get("data", {}).get("bills"))
+                            balance_texts.append(_render_balance_line(student_id, student_name, total_fees, total_paid, balance, has_bills))
 
                         if not balance_texts:
                             response_text = f"📊 *Hi {fullname},*\nNo fees recorded for any students in term *{term}*. Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
@@ -1325,7 +1301,7 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                             total_fees = sum(float(bill["amount"]) for bill in billed_fees.get("data", {}).get("bills", [])) if billed_fees.get("data", {}).get("bills") else 0.0
                             total_paid = sum(float(p["amount"]) for p in payments.get("data", {}).get("payments", [])) if payments.get("data", {}).get("payments") else 0.0
-                            balance = total_fees - total_paid
+                            balance = _canonical_balance(sms_client, student_id, term, account=account)
 
                             student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
                             if not billed_fees.get("data", {}).get("bills"):
@@ -1345,29 +1321,9 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                                     if billed_fees.get("data", {}).get("bills")
                                     else "No fees recorded."
                                 )
-                                # Determine balance label
-                                if balance > 0:
-                                    balance_label = f"*Balance Owed*: ${balance:.2f}"
-                                elif balance < 0:
-                                    balance_label = f"*Credit/Overpayment*: ${abs(balance):.2f}"
-                                else:
-                                    balance_label = "*Status*: ✅ *Fully Paid*"
-
-                                statement_text = (
-                                    f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
-                                    f"*Total Fees*: ${total_fees:.2f}\n"
-                                    f"*Total Paid*: ${total_paid:.2f}\n"
-                                    f"{balance_label}\n"
-                                    f"*Fees Charged*:\n{fee_details}\n"
-                                    f"*Payments*:\n{payment_details}"
-                                ) if balance != 0.0 or total_fees <= 0.0 else (
-                                    f"*Account Statement for {student_id} ({student_name}, Term {term})*:\n"
-                                    f"*Great news!* Balance is *fully paid*.\n"
-                                    f"*Total Fees*: ${total_fees:.2f}\n"
-                                    f"*Total Paid*: ${total_paid:.2f}\n"
-                                    f"{balance_label}\n"
-                                    f"*Fees Charged*:\n{fee_details}\n"
-                                    f"*Payments*:\n{payment_details}"
+                                statement_text = _render_statement_block(
+                                    student_id, student_name, term,
+                                    total_fees, total_paid, balance, fee_details, payment_details,
                                 )
 
                                 if len(statement_text) > max_message_length:
