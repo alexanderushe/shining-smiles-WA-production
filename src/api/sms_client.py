@@ -31,7 +31,15 @@ class LegacyCollection(list):
 class SaaSClient:
     """Compatibility client that reads from the Shining Smiles SaaS integration API."""
 
-    def __init__(self, request_id=None, use_cloud_api=None, tenant_config=None):
+    def __init__(self, request_id=None, use_cloud_api=None, tenant_config=None,
+                 caller_phone=None):
+        # The WhatsApp sender's number. Sent as ?phone= on per-student calls so
+        # the SaaS can check the caller is actually that child's guardian —
+        # knowing a student id is not authorisation, and ids are sequential.
+        # None means "not supplied": the SaaS still serves the request while its
+        # WA_REQUIRE_GUARDIAN_FOR_STUDENT setting is off, so an older bot build
+        # keeps working during rollout.
+        self.caller_phone = caller_phone
         self.tenant_config = tenant_config or get_current_tenant()
         raw_base_url = ((self.tenant_config or {}).get("sms_api_base_url") or config.SMS_API_BASE_URL or "").rstrip("/") + "/"
         self.api_key = (self.tenant_config or {}).get("sms_api_key") or config.SMS_API_KEY
@@ -107,6 +115,13 @@ class SaaSClient:
         extra_log = {"request_id": self.request_id}
         if student_id:
             extra_log["student_id"] = student_id
+
+        # Identify the caller on per-student reads. Done here rather than in each
+        # method so a new endpoint cannot quietly skip it. resolve/ already
+        # carries the number as its lookup key, so it is left alone.
+        if self.caller_phone and "students/" in str(path):
+            params = dict(params or {})
+            params.setdefault("phone", self.caller_phone)
 
         for attempt in range(3):
             try:

@@ -1453,6 +1453,11 @@ def process_cloud_api_message(message, metadata):
             raise
 
         from_number = f"+{message.get('from')}"
+        # Tell the SaaS who is asking. Per-student reads are gated on the caller
+        # being that child's guardian, and the client cannot know the sender
+        # until here — it is constructed before the message is unpacked.
+        if sms_client is not None:
+            sms_client.caller_phone = from_number
         message_id = message.get("id")
         timestamp = message.get("timestamp")
         message_type = message.get("type")

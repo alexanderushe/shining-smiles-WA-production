@@ -69,6 +69,8 @@ def process_cloud_api_message(message, metadata):
 
         # Extract message details
         from_number = f"+{message.get('from')}"
+        if sms_client is not None:
+            sms_client.caller_phone = from_number
         message_id = message.get("id")
         timestamp = message.get("timestamp")
         message_type = message.get("type")
