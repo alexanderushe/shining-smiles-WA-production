@@ -811,13 +811,20 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                         student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
                         if gatepass_res.status_code == 200:
-                            if "already valid" in status_msg or "resent" in status_msg:
+                            if "already valid" in status_msg or "resent" in status_msg or "valid (text-only" in status_msg:
                                 gatepass_texts.append(
                                     f"*Gate Pass for {student_id} ({student_name})*:\n"
                                     f"You *already have a valid gate pass*.\n"
                                     f"*Pass ID*: {data.get('pass_id')}\n"
                                     f"*Expires*: _{data.get('expiry_date')}_\n"
                                     f"*PDF re-sent to*: {data.get('whatsapp_number')}"
+                                )
+                            elif "no gate pass" in status_msg:
+                                reason = data.get('reason', 'Payment below required threshold.')
+                                gatepass_texts.append(
+                                    f"*Gate Pass for {student_id} ({student_name})*:\n"
+                                    f"⚠️ *Gate pass not issued.*\n"
+                                    f"{reason}"
                                 )
                             else:
                                 gatepass_texts.append(
@@ -1918,13 +1925,20 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
 
                         student_name = next((f"{c.firstname or ''} {c.lastname or ''}".strip() for c in contacts if c.student_id == student_id), "Unknown")
                         if gatepass_res.status_code == 200:
-                            if "already valid" in status_msg or "resent" in status_msg:
+                            if "already valid" in status_msg or "resent" in status_msg or "valid (text-only" in status_msg:
                                 gatepass_texts.append(
                                     f"*Gate Pass for {student_id} ({student_name})*:\n"
                                     f"You *already have a valid gate pass*.\n"
                                     f"*Pass ID*: {data.get('pass_id')}\n"
                                     f"*Expires*: _{data.get('expiry_date')}_\n"
                                     f"*PDF re-sent to*: {data.get('whatsapp_number')}"
+                                )
+                            elif "no gate pass" in status_msg:
+                                reason = data.get('reason', 'Payment below required threshold.')
+                                gatepass_texts.append(
+                                    f"*Gate Pass for {student_id} ({student_name})*:\n"
+                                    f"⚠️ *Gate pass not issued.*\n"
+                                    f"{reason}"
                                 )
                             else:
                                 gatepass_texts.append(
@@ -1946,10 +1960,16 @@ def handle_whatsapp_message(whatsapp_number, message_body, session, sms_client, 
                             f"⚠️ *Hi {fullname},*\n*No gate passes issued.* Please contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
                         )
                     else:
+                        has_actual_pass = any("Gate Pass Issued" in text or "already have a valid" in text for text in gatepass_texts)
+                        if has_actual_pass:
+                            header = "✅ *Gate pass issued!*\n\n"
+                        else:
+                            header = "📋 *Gate Pass Status:*\n\n"
                         response_text = (
-                            f"✅ *Hi {fullname},*\n"
+                            f"*Hi {fullname},*\n"
+                            f"{header}"
                             f"\n\n".join(gatepass_texts) +
-                            f"\nIf not received, ensure *{whatsapp_number}* is registered with WhatsApp or contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
+                            f"\n\nIf not received, ensure *{whatsapp_number}* is registered with WhatsApp or contact _admin@shiningsmilescollege.ac.zw_.\n{menu_text}"
                         )
                         response_message = response.message(response_text)
 
