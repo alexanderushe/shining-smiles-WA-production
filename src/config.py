@@ -37,6 +37,11 @@ class Config:
     # Welcome-on-registration (reuses RECEIPT_WEBHOOK_SECRET for auth).
     WELCOME_TEMPLATE_NAME = os.getenv("WELCOME_TEMPLATE_NAME", "")
     WELCOME_TEMPLATE_LANG = os.getenv("WELCOME_TEMPLATE_LANG", "en_US")
+    # Daily Learning summary to guardians who agreed (reuses RECEIPT_WEBHOOK_SECRET).
+    # Template body: {{1}} school name, {{2}} day, {{3}} one-line summary. Unset -> plain
+    # text (only delivers inside an open 24h conversation — fine for staging).
+    LEARNING_DIGEST_TEMPLATE_NAME = os.getenv("LEARNING_DIGEST_TEMPLATE_NAME", "")
+    LEARNING_DIGEST_TEMPLATE_LANG = os.getenv("LEARNING_DIGEST_TEMPLATE_LANG", "en_US")
     # Comma-separated phone_number_ids this bot should ignore (e.g. a shared test
     # number whose webhook also reaches this app). Inbound for these is dropped.
     IGNORE_PHONE_NUMBER_IDS = os.getenv("IGNORE_PHONE_NUMBER_IDS", "")
