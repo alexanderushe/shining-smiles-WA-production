@@ -18,12 +18,14 @@ from routes.verify import verify_bp
 from routes.receipts import receipts_bp
 from routes.guardian_cache import guardian_cache_bp
 from routes.welcome import welcome_bp
+from routes.learning_digest import learning_digest_bp
 
 app = Flask(__name__)
 app.register_blueprint(verify_bp)
 app.register_blueprint(receipts_bp)
 app.register_blueprint(guardian_cache_bp)
 app.register_blueprint(welcome_bp)
+app.register_blueprint(learning_digest_bp)
 
 # Minimal stand-in for the Lambda context. The live webhook path doesn't use it;
 # only the retired self-invoke recursion did (now a no-op).

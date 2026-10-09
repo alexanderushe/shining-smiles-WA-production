@@ -5,9 +5,14 @@ saw $190 cash, and displayed "Balance Owed: $300.00" — but the account carried
 legacy write-off CreditNote (-$300) so the admin app's canonical outstanding
 balance was $0. The bot must source the canonical balance, never fees-minus-cash.
 """
+import os
+import sys
+
 import pytest
 
-import webhook_handler as wh
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+import webhook_handler as wh  # noqa: E402
 
 
 class StubClient:
